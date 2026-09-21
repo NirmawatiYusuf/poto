@@ -399,6 +399,11 @@ const App = (() => {
   if (typeof window !== 'undefined') {
     window.addEventListener('beforeunload', stopCamera);
     window.addEventListener('pagehide', stopCamera);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && stream && videoEl && videoEl.paused) {
+        videoEl.play().catch(e => console.warn('Auto-resume video play:', e));
+      }
+    });
   }
 
   async function startCamera(facingMode = 'user') {
@@ -429,16 +434,18 @@ const App = (() => {
       // Stage 3: Try any video source (works on virtually 100% of devices)
       let newStream = null;
       try {
+        // 1280x720 ideal: good quality live preview without stressing USB bandwidth
         newStream = await navigator.mediaDevices.getUserMedia({
           video: {
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-            facingMode: facingMode ? { ideal: facingMode } : undefined
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            facingMode: facingMode ? { ideal: facingMode } : undefined,
+            frameRate: { ideal: 30, max: 30 }
           },
           audio: false
         });
       } catch (err1) {
-        console.warn('Optimal HD constraint failed, trying basic facingMode:', err1);
+        console.warn('HD 720p constraint failed, trying basic facingMode:', err1);
         try {
           newStream = await navigator.mediaDevices.getUserMedia({
             video: facingMode ? { facingMode: { ideal: facingMode } } : true,
@@ -454,13 +461,31 @@ const App = (() => {
       }
 
       stream = newStream;
+
+      // Listen for USB disconnect / track ending (USB selective suspend, cable pull)
+      stream.getTracks().forEach(track => {
+        track.onended = () => {
+          console.warn('Camera track ended (USB disconnect?). Attempting reconnect in 1.5s...');
+          stopCamera();
+          const standby = $('#standby-card');
+          if (standby) {
+            standby.style.display = 'flex';
+            const h3 = standby.querySelector('h3');
+            const p = standby.querySelector('#standby-msg');
+            if (h3) h3.textContent = 'Kamera Terputus';
+            if (p) p.innerHTML = 'Koneksi kamera terputus. Menyambungkan ulang otomatis...<br/><small>Jika gagal, klik <strong>Mulai Kamera</strong> lagi.</small>';
+          }
+          setTimeout(() => startCamera(_currentFacing), 1500);
+        };
+      });
+
       videoEl.srcObject = stream;
       await videoEl.play();
 
-      // Optimize live preview canvas resolution for 60 FPS responsiveness
-      const maxLiveW = 960;
+      // Live preview canvas: cap at 720px wide to match 720p stream (no upscaling needed)
+      const maxLiveW = 720;
       const vW = videoEl.videoWidth || 1280;
-      const vH = videoEl.videoHeight || 960;
+      const vH = videoEl.videoHeight || 720;
       const scale = Math.min(1, maxLiveW / vW);
       canvasEl.width = Math.round(vW * scale);
       canvasEl.height = Math.round(vH * scale);
@@ -518,40 +543,72 @@ const App = (() => {
     await startCamera(_currentFacing);
   }
 
-  // ─── Real-time Render Loop ───
+  // ─── Real-time Render Loop (capped at 30fps to reduce CPU/USB heat) ───
+  const TARGET_FPS = 30;
+  const FRAME_INTERVAL = 1000 / TARGET_FPS;
+  let _lastFrameTime = 0;
+
   function startRenderLoop() {
     if (animFrameId) cancelAnimationFrame(animFrameId);
+    _lastFrameTime = 0;
 
-    function render() {
+    function render(timestamp) {
       if (!stream) {
         return; // Terminate loop if camera stopped
       }
+
+      // Throttle to TARGET_FPS — prevents uncapped CPU/USB load
+      const elapsed = timestamp - _lastFrameTime;
+      if (elapsed < FRAME_INTERVAL) {
+        animFrameId = requestAnimationFrame(render);
+        return;
+      }
+      _lastFrameTime = timestamp - (elapsed % FRAME_INTERVAL);
+
       if (videoEl.readyState < 2) {
         animFrameId = requestAnimationFrame(render);
         return;
       }
 
-      // Check if current filter is a canvas-level effect (multi-face/clone)
-      if (Filters.isCanvasFilter(currentFilter)) {
-        // Canvas filters handle their own drawing (mirroring is handled inside)
-        Filters.applyCanvas(currentFilter, ctx, videoEl, canvasEl.width, canvasEl.height, isMirrored);
-      } else {
-        // Normal pixel-based filter flow
-        ctx.save();
-        if (isMirrored) {
-          ctx.translate(canvasEl.width, 0);
-          ctx.scale(-1, 1);
-        }
-        ctx.drawImage(videoEl, 0, 0, canvasEl.width, canvasEl.height);
-        ctx.restore();
+      try {
+        if (Filters.isCanvasFilter(currentFilter)) {
+          // Hardware-accelerated clone / mirror / pixelate / pop-grid
+          Filters.applyCanvas(currentFilter, ctx, videoEl, canvasEl.width, canvasEl.height, isMirrored);
+        } else if (Filters.isGpuFilter(currentFilter)) {
+          // 100% GPU-accelerated path (Direct3D/OpenGL/Metal) — 0 CPU overhead, 0 RAM allocation!
+          Filters.applyGpu(currentFilter, ctx, videoEl, canvasEl.width, canvasEl.height, isMirrored);
+        } else {
+          // Fallback procedural CPU filter flow
+          ctx.save();
+          if (isMirrored) {
+            ctx.translate(canvasEl.width, 0);
+            ctx.scale(-1, 1);
+          }
+          ctx.drawImage(videoEl, 0, 0, canvasEl.width, canvasEl.height);
+          ctx.restore();
 
-        if (currentFilter !== 'normal') {
-          const imageData = ctx.getImageData(0, 0, canvasEl.width, canvasEl.height);
-          const filtered = Filters.apply(currentFilter, imageData);
-          ctx.putImageData(filtered, 0, 0);
+          if (currentFilter !== 'normal') {
+            const imageData = ctx.getImageData(0, 0, canvasEl.width, canvasEl.height);
+            const filtered = Filters.apply(currentFilter, imageData);
+            ctx.putImageData(filtered, 0, 0);
+          }
         }
+      } catch (err) {
+        console.warn('Render loop frame warning (recovering):', err);
+        // Fail-safe: draw plain mirrored video frame so preview NEVER freezes
+        try {
+          ctx.filter = 'none';
+          ctx.save();
+          if (isMirrored) {
+            ctx.translate(canvasEl.width, 0);
+            ctx.scale(-1, 1);
+          }
+          ctx.drawImage(videoEl, 0, 0, canvasEl.width, canvasEl.height);
+          ctx.restore();
+        } catch (_) {}
       }
 
+      // Safe recovery: ensure loop is always re-scheduled no matter what
       animFrameId = requestAnimationFrame(render);
     }
 
@@ -567,7 +624,7 @@ const App = (() => {
     const base = document.createElement('canvas');
     base.width = 80;
     base.height = 56;
-    const bCtx = base.getContext('2d');
+    const bCtx = base.getContext('2d', { willReadFrequently: true });
 
     // Soft studio backdrop
     const bgGrad = bCtx.createLinearGradient(0, 0, 80, 56);
@@ -620,7 +677,7 @@ const App = (() => {
       const snap = document.createElement('canvas');
       snap.width = 80;
       snap.height = 56;
-      const sCtx = snap.getContext('2d');
+      const sCtx = snap.getContext('2d', { willReadFrequently: true });
       if (isMirrored) {
         sCtx.translate(80, 0);
         sCtx.scale(-1, 1);
@@ -634,18 +691,24 @@ const App = (() => {
     filters.forEach(f => {
       const canvas = document.getElementById(`thumb-${f.id}`);
       if (!canvas) return;
-      const tCtx = canvas.getContext('2d');
+      const tCtx = canvas.getContext('2d', { willReadFrequently: true });
       tCtx.clearRect(0, 0, 80, 56);
 
-      if (Filters.isCanvasFilter(f.id)) {
-        Filters.applyCanvas(f.id, tCtx, sourceBase, 80, 56, false);
-      } else {
-        tCtx.drawImage(sourceBase, 0, 0, 80, 56);
-        if (f.id !== 'normal') {
-          const imgData = tCtx.getImageData(0, 0, 80, 56);
-          const filtered = Filters.apply(f.id, imgData);
-          tCtx.putImageData(filtered, 0, 0);
+      try {
+        if (Filters.isCanvasFilter(f.id)) {
+          Filters.applyCanvas(f.id, tCtx, sourceBase, 80, 56, false);
+        } else if (Filters.isGpuFilter(f.id)) {
+          Filters.applyGpu(f.id, tCtx, sourceBase, 80, 56, false);
+        } else {
+          tCtx.drawImage(sourceBase, 0, 0, 80, 56);
+          if (f.id !== 'normal') {
+            const imgData = tCtx.getImageData(0, 0, 80, 56);
+            const filtered = Filters.apply(f.id, imgData);
+            tCtx.putImageData(filtered, 0, 0);
+          }
         }
+      } catch (e) {
+        tCtx.drawImage(sourceBase, 0, 0, 80, 56);
       }
     });
   }

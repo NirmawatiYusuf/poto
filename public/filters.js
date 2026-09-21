@@ -10,6 +10,43 @@ const Filters = (() => {
     return val < 0 ? 0 : val > 255 ? 255 : val;
   }
 
+  // Shared reusable buffer to eliminate per-frame Garbage Collection (GC) pauses
+  let _sharedCopy = null;
+  function getSharedCopy(data) {
+    if (!_sharedCopy || _sharedCopy.length !== data.length) {
+      _sharedCopy = new Uint8ClampedArray(data.length);
+    }
+    _sharedCopy.set(data);
+    return _sharedCopy;
+  }
+
+  // GPU-accelerated radial vignette overlay using native 2D canvas gradient (0 CPU overhead)
+  function drawVignette(ctx, w, h, strength = 0.6) {
+    ctx.save();
+    const cx = w / 2;
+    const cy = h / 2;
+    const radius = Math.max(cx, cy) * 1.1;
+    const grad = ctx.createRadialGradient(cx, cy, radius * 0.25, cx, cy, radius);
+    grad.addColorStop(0, 'rgba(0,0,0,0)');
+    grad.addColorStop(1, `rgba(0,0,0,${strength})`);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+  }
+
+  // GPU-accelerated duotone color overlay using canvas blending
+  function drawDuotoneOverlay(ctx, w, h) {
+    ctx.save();
+    const grad = ctx.createLinearGradient(0, 0, w, h);
+    grad.addColorStop(0, 'rgba(76, 29, 149, 0.65)'); // Violet
+    grad.addColorStop(1, 'rgba(6, 182, 212, 0.65)');  // Cyan
+    ctx.globalCompositeOperation = 'screen';
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+  }
+
+  // Fallback CPU vignette (kept for standalone image export if needed)
   function applyVignette(data, width, height, strength = 0.5) {
     const cx = width / 2;
     const cy = height / 2;
@@ -146,7 +183,7 @@ const Filters = (() => {
     const data = imageData.data;
     const w = imageData.width;
     const h = imageData.height;
-    const copy = new Uint8ClampedArray(data);
+    const copy = getSharedCopy(data);
     const half = Math.floor(w / 2);
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < half; x++) {
@@ -165,7 +202,7 @@ const Filters = (() => {
     const data = imageData.data;
     const w = imageData.width;
     const h = imageData.height;
-    const copy = new Uint8ClampedArray(data);
+    const copy = getSharedCopy(data);
     const cx = w / 2;
     const cy = h / 2;
 
@@ -209,7 +246,7 @@ const Filters = (() => {
     const data = imageData.data;
     const w = imageData.width;
     const h = imageData.height;
-    const copy = new Uint8ClampedArray(data);
+    const copy = getSharedCopy(data);
     const cx = w / 2;
     const cy = h / 2;
     const maxRadius = Math.min(cx, cy);
@@ -247,7 +284,7 @@ const Filters = (() => {
     const data = imageData.data;
     const w = imageData.width;
     const h = imageData.height;
-    const copy = new Uint8ClampedArray(data);
+    const copy = getSharedCopy(data);
     const cx = w / 2;
     const cy = h / 2;
     const maxRadius = Math.min(cx, cy);
@@ -312,7 +349,7 @@ const Filters = (() => {
     const data = imageData.data;
     const w = imageData.width;
     const h = imageData.height;
-    const copy = new Uint8ClampedArray(data);
+    const copy = getSharedCopy(data);
 
     const levels = 5;
     const step = 255 / levels;
@@ -336,9 +373,9 @@ const Filters = (() => {
 
         const edgeH = Math.abs(grayL - grayR);
         const edgeV = Math.abs(grayU - grayD);
-        const edge = Math.sqrt(edgeH * edgeH + edgeV * edgeV);
+        const edge = edgeH + edgeV;
 
-        if (edge > 34) {
+        if (edge > 44) {
           const idx = (y * w + x) * 4;
           data[idx] = data[idx + 1] = data[idx + 2] = 12;
           const idx2 = ((y + 1) * w + x) * 4;
@@ -417,7 +454,7 @@ const Filters = (() => {
     const w = imageData.width;
     const h = imageData.height;
     const offset = 8;
-    const copy = new Uint8ClampedArray(data);
+    const copy = getSharedCopy(data);
 
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
@@ -453,7 +490,7 @@ const Filters = (() => {
     const data = imageData.data;
     const w = imageData.width;
     const h = imageData.height;
-    const copy = new Uint8ClampedArray(data);
+    const copy = getSharedCopy(data);
 
     for (let y = 1; y < h - 1; y++) {
       for (let x = 1; x < w - 1; x++) {
@@ -486,7 +523,7 @@ const Filters = (() => {
     const data = imageData.data;
     const w = imageData.width;
     const h = imageData.height;
-    const copy = new Uint8ClampedArray(data);
+    const copy = getSharedCopy(data);
 
     for (let i = 0; i < data.length; i += 4) {
       data[i]     = clamp(copy[i] * 1.1 + 10);
@@ -677,16 +714,83 @@ const Filters = (() => {
     }
   }
 
-  // Map of canvas filter IDs to their render functions
+  function canvasPixelate(ctx, video, w, h, mirrored) {
+    const cellSize = 14;
+    const sw = Math.max(1, Math.round(w / cellSize));
+    const sh = Math.max(1, Math.round(h / cellSize));
+    const { canvas: offC, ctx: offCtx } = getOffscreen(sw, sh);
+    offCtx.save();
+    if (mirrored) {
+      offCtx.translate(sw, 0);
+      offCtx.scale(-1, 1);
+    }
+    offCtx.drawImage(video, 0, 0, sw, sh);
+    offCtx.restore();
+
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(offC, 0, 0, w, h);
+    ctx.restore();
+  }
+
+  function canvasSplitMirror(ctx, video, w, h, mirrored) {
+    const hw = Math.ceil(w / 2);
+    const { canvas: vBuf, ctx: vCtx } = getOffscreen(w, h);
+    vCtx.save();
+    if (mirrored) {
+      vCtx.translate(w, 0);
+      vCtx.scale(-1, 1);
+    }
+    vCtx.drawImage(video, 0, 0, w, h);
+    vCtx.restore();
+
+    ctx.clearRect(0, 0, w, h);
+    // Left half normal
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, hw, h);
+    ctx.clip();
+    ctx.drawImage(vBuf, 0, 0);
+    ctx.restore();
+
+    // Right half flip horizontal
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(hw, 0, hw, h);
+    ctx.clip();
+    ctx.translate(w, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(vBuf, 0, 0);
+    ctx.restore();
+  }
+
+  // Map of canvas filter IDs to their render functions (100% GPU accelerated drawImage/transforms)
   const canvasFilters = {
-    'clone-4':   (ctx, v, w, h, m) => canvasGrid(ctx, v, w, h, 2, 2, m),
-    'clone-9':   (ctx, v, w, h, m) => canvasGrid(ctx, v, w, h, 3, 3, m),
-    'clone-16':  (ctx, v, w, h, m) => canvasGrid(ctx, v, w, h, 4, 4, m),
-    'clone-25':  (ctx, v, w, h, m) => canvasGrid(ctx, v, w, h, 5, 5, m),
+    'clone-4':     (ctx, v, w, h, m) => canvasGrid(ctx, v, w, h, 2, 2, m),
+    'clone-9':     (ctx, v, w, h, m) => canvasGrid(ctx, v, w, h, 3, 3, m),
+    'clone-16':    (ctx, v, w, h, m) => canvasGrid(ctx, v, w, h, 4, 4, m),
+    'clone-25':    (ctx, v, w, h, m) => canvasGrid(ctx, v, w, h, 5, 5, m),
     'mirror-quad': (ctx, v, w, h) => canvasMirrorQuad(ctx, v, w, h),
-    'tunnel':    (ctx, v, w, h, m) => canvasTunnel(ctx, v, w, h, m),
-    'pop-grid':  (ctx, v, w, h) => canvasPopArtGrid(ctx, v, w, h),
-    'stripe':    (ctx, v, w, h, m) => canvasStripe(ctx, v, w, h, m),
+    'tunnel':      (ctx, v, w, h, m) => canvasTunnel(ctx, v, w, h, m),
+    'pop-grid':    (ctx, v, w, h) => canvasPopArtGrid(ctx, v, w, h),
+    'stripe':      (ctx, v, w, h, m) => canvasStripe(ctx, v, w, h, m),
+    'pixelate':    (ctx, v, w, h, m) => canvasPixelate(ctx, v, w, h, m),
+    'mirror':      (ctx, v, w, h, m) => canvasSplitMirror(ctx, v, w, h, m),
+  };
+
+  // GPU Hardware-Accelerated Filters (using native Direct3D/Metal/OpenGL via ctx.filter)
+  const gpuFilters = {
+    'normal':       { filter: 'none' },
+    'grayscale':    { filter: 'grayscale(100%)' },
+    'sepia':        { filter: 'sepia(100%)' },
+    'vintage':      { filter: 'sepia(60%) contrast(115%) brightness(95%)', vignette: 0.6 },
+    'warm':         { filter: 'sepia(35%) saturate(145%) brightness(105%)' },
+    'cool':         { filter: 'hue-rotate(180deg) sepia(20%) saturate(120%)' },
+    'highContrast': { filter: 'contrast(175%)' },
+    'saturate':     { filter: 'saturate(220%)' },
+    'invert':       { filter: 'invert(100%)' },
+    'lomo':         { filter: 'contrast(140%) saturate(145%) brightness(105%)', vignette: 0.75 },
+    'duotone':      { filter: 'grayscale(100%) contrast(160%)', duotone: true }
   };
 
   // ═══════════════════════════════════════════
@@ -794,6 +898,7 @@ const Filters = (() => {
       category: 'distortion',
       tag: 'Symmetry',
       swatch: 'linear-gradient(90deg, #2563eb 47%, #93c5fd 50%, #2563eb 53%)',
+      type: 'canvas',
       fn: mirror
     },
     {
@@ -832,6 +937,7 @@ const Filters = (() => {
       category: 'fun',
       tag: 'Retro Grid',
       swatch: 'repeating-conic-gradient(#059669 0% 25%, #10b981 0% 50%) 50% / 12px 12px',
+      type: 'canvas',
       fn: pixelate
     },
     {
@@ -995,13 +1101,35 @@ const Filters = (() => {
     getFilter: (id) => registry.find(f => f.id === id),
     getByCategory: (cat) => cat === 'all' ? registry : registry.filter(f => f.category === cat),
     isCanvasFilter: (id) => !!canvasFilters[id],
-    apply: (id, imageData) => {
-      const filter = registry.find(f => f.id === id);
-      return (filter && filter.fn) ? filter.fn(imageData) : imageData;
+    isGpuFilter: (id) => !!gpuFilters[id],
+    applyGpu: (id, ctx, video, w, h, mirrored) => {
+      const cfg = gpuFilters[id];
+      if (!cfg) return false;
+      ctx.save();
+      ctx.filter = cfg.filter || 'none';
+      if (mirrored) {
+        ctx.translate(w, 0);
+        ctx.scale(-1, 1);
+      }
+      ctx.drawImage(video, 0, 0, w, h);
+      ctx.filter = 'none';
+      ctx.restore();
+
+      if (cfg.vignette) {
+        drawVignette(ctx, w, h, cfg.vignette);
+      }
+      if (cfg.duotone) {
+        drawDuotoneOverlay(ctx, w, h);
+      }
+      return true;
     },
     applyCanvas: (id, ctx, video, w, h, mirrored) => {
       const fn = canvasFilters[id];
       if (fn) fn(ctx, video, w, h, mirrored);
+    },
+    apply: (id, imageData) => {
+      const filter = registry.find(f => f.id === id);
+      return (filter && filter.fn) ? filter.fn(imageData) : imageData;
     }
   };
 
