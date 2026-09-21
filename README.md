@@ -201,15 +201,17 @@ potooo/
 │   ├── upload.js         # Upload Foto & Strip ke Google Drive
 │   └── lib/
 │       └── gdrive.js     # Google Drive Client Engine (OAuth + Service Account)
-├── admin.html            # Antarmuka Admin Panel & Galeri Foto
-├── admin.css             # Styling Masonry Grid Galeri Admin
-├── admin.js              # Logika Galeri & Kontrol Sinkronisasi Cloud
-├── app.js                # Core Studio Engine (Kamera, Shutter, Filter, Boomerang)
-├── filters.js            # Engine Pemrosesan Gambar Realtime Canvas
-├── index.html            # Antarmuka Utama SnapBooth Studio
-├── style.css             # Desain Sistem & Responsivitas Mobile/Tablet/Desktop
-├── server.js             # Local Dev Server (Dual HTTP 3000 & HTTPS 3443)
-├── vercel.json           # Konfigurasi Serverless Vercel Functions & CORS
+├── public/               # Frontend Web Static Assets (Edge CDN Vercel)
+│   ├── index.html        # Antarmuka Utama SnapBooth Studio
+│   ├── style.css         # Desain Sistem & Responsivitas Mobile/Tablet/Desktop
+│   ├── app.js            # Core Studio Engine (Kamera, Shutter, Filter, Boomerang)
+│   ├── filters.js        # Engine Pemrosesan Gambar Realtime Canvas
+│   ├── admin.html        # Antarmuka Admin Panel & Galeri Foto
+│   ├── admin.css         # Styling Masonry Grid Galeri Admin
+│   └── admin.js          # Logika Galeri & Kontrol Sinkronisasi Cloud
+├── local-server.js       # Local Dev Server (Dual HTTP 3000 & HTTPS 3443)
+├── package.json          # Dependensi Node.js & Script Dev
+├── vercel.json           # Konfigurasi Serverless Vercel Functions & Clean URLs
 └── README.md             # Dokumentasi Lengkap Project
 ```
 

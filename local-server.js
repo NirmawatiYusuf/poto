@@ -27,7 +27,7 @@ if (fs.existsSync(path.join(__dirname, '.env'))) {
 
 const PORT_HTTP = 3000;
 const PORT_HTTPS = 3443;
-const PUBLIC_DIR = __dirname;
+const PUBLIC_DIR = path.join(__dirname, 'public');
 const CERT_DIR = path.join(__dirname, '.certs');
 
 // ─── Detect Local IPs ───
@@ -177,7 +177,7 @@ const MIME_TYPES = {
 };
 
 // ─── Captures Directory ───
-const CAPTURES_DIR = path.join(PUBLIC_DIR, 'captures');
+const CAPTURES_DIR = path.join(__dirname, 'captures');
 if (!fs.existsSync(CAPTURES_DIR)) fs.mkdirSync(CAPTURES_DIR, { recursive: true });
 
 // ─── Helper: Read POST body ───
@@ -260,8 +260,29 @@ function handleRequest(req, res) {
 
   if (pathname === '/') pathname = '/index.html';
 
+  // Handle local captures folder
+  if (pathname.startsWith('/captures/')) {
+    const rel = pathname.slice('/captures/'.length);
+    const capPath = path.join(CAPTURES_DIR, rel);
+    if (!capPath.startsWith(CAPTURES_DIR)) {
+      res.writeHead(403);
+      res.end('Forbidden');
+      return;
+    }
+    fs.readFile(capPath, (err, data) => {
+      if (err) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('404 Not Found');
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'image/png' });
+      res.end(data);
+    });
+    return;
+  }
+
   // Don't serve server internals
-  if (pathname.startsWith('/.certs') || pathname.startsWith('/node_modules') || pathname === '/server.js' || pathname === '/package.json' || pathname === '/package-lock.json') {
+  if (pathname.startsWith('/.certs') || pathname.startsWith('/node_modules') || pathname === '/local-server.js' || pathname === '/package.json' || pathname === '/package-lock.json') {
     res.writeHead(403);
     res.end('Forbidden');
     return;
