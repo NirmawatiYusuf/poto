@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SnapBooth Studio — Cloud Admin Panel</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="admin.css" />
+</head>
+<body class="admin-body">
+
+  <!-- ═══ PIN Gate Overlay ═══ -->
+  <div class="pin-gate-overlay" id="pin-gate">
+    <div class="pin-card">
+      <div class="brand-symbol">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+        </svg>
+      </div>
+      <h2>Akses Panel Admin</h2>
+      <p>Masukkan PIN keamanan untuk melihat hasil foto di cloud.</p>
+      <form id="pin-form">
+        <input type="password" id="pin-input" placeholder="Masukkan PIN (Default: 123456)" maxlength="20" autofocus required />
+        <button type="submit" class="btn-primary" id="btn-login">Masuk ke Dashboard</button>
+      </form>
+      <div class="pin-error" id="pin-error">PIN tidak sesuai. Silakan coba lagi.</div>
+      <a href="/" class="link-back-camera">← Kembali ke Kamera Booth</a>
+    </div>
+  </div>
+
+  <!-- ═══ Admin Dashboard Container ═══ -->
+  <div class="admin-wrapper" id="admin-content" style="display:none;">
+
+    <!-- Top Navigation Bar -->
+    <header class="admin-header">
+      <div class="brand">
+        <div class="brand-symbol">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 00-9.78 2.096A4.001 4.001 0 003 15z"/>
+          </svg>
+        </div>
+        <div class="brand-titles">
+          <div class="brand-name">
+            SnapBooth <span class="brand-badge">CLOUD ADMIN</span>
+          </div>
+          <div class="storage-status-pill" id="storage-pill">
+            <span class="dot"></span>
+            <span id="storage-text">Memeriksa Storage...</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <a href="/" class="btn-secondary" title="Buka Kamera Photobooth">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
+          Buka Kamera
+        </a>
+        <button class="btn-secondary" id="btn-refresh" title="Muat Ulang Foto">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+          </svg>
+          Segarkan
+        </button>
+        <button class="btn-secondary" id="btn-logout" title="Kunci Dashboard">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+          </svg>
+          Keluar
+        </button>
+      </div>
+    </header>
+
+    <!-- Stats Bar -->
+    <section class="stats-row">
+      <div class="stat-card">
+        <span class="stat-label">Total Foto di Cloud</span>
+        <span class="stat-value" id="stat-total">0</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Single Shot</span>
+        <span class="stat-value" id="stat-single">0</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">4-Shot Photostrips</span>
+        <span class="stat-value" id="stat-strip">0</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Penyimpanan Aktif</span>
+        <span class="stat-value storage-name" id="stat-storage">Google Drive</span>
+      </div>
+    </section>
+
+    <!-- Google Drive OAuth 2.0 Integration Banner -->
+    <section class="oauth-banner" id="oauth-banner">
+      <div class="oauth-info">
+        <div class="oauth-icon">
+          <svg viewBox="0 0 87.3 78" width="26" height="24">
+            <path d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8h-27.5c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/>
+            <path d="m43.65 25-13.75-23.8c-1.35.8-2.5 1.9-3.3 3.3l-25.4 44c-.8 1.4-1.2 2.95-1.2 4.5h27.5z" fill="#00ac47"/>
+            <path d="m73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5h-27.502l5.852 11.5z" fill="#ea4335"/>
+            <path d="m43.65 25 13.75-23.8c-1.35-.8-2.9-1.2-4.5-1.2h-18.5c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d"/>
+            <path d="m59.8 53h-32.3l-13.75 23.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z" fill="#2684fc"/>
+            <path d="m73.4 26.5-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3l-13.75 23.8 16.15 28h27.45c0-1.55-.4-3.1-1.2-4.5z" fill="#ffba00"/>
+          </svg>
+        </div>
+        <div class="oauth-text">
+          <div class="oauth-title" id="oauth-title">Koneksi Google Drive (OAuth 2.0)</div>
+          <div class="oauth-desc" id="oauth-desc">Hubungkan akun Google pribadi agar foto otomatis tersimpan langsung di Google Drive (Kuota 15GB).</div>
+        </div>
+      </div>
+      <div class="oauth-actions">
+        <button class="btn-primary" id="btn-oauth-connect">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="16" height="16">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+          </svg>
+          <span id="btn-oauth-text">Hubungkan Google Drive</span>
+        </button>
+        <button class="btn-secondary" id="btn-oauth-config" title="Setup Client ID & Secret">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="16" height="16">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
+          Setup
+        </button>
+      </div>
+    </section>
+
+    <!-- Filter & Controls Toolbar -->
+    <section class="admin-toolbar">
+      <div class="filter-tabs">
+        <button class="filter-tab active" data-type="all">Semua Foto</button>
+        <button class="filter-tab" data-type="single">Single Shot</button>
+        <button class="filter-tab" data-type="strip">Photostrip</button>
+      </div>
+
+      <div class="search-box">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="16" height="16">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+        </svg>
+        <input type="text" id="search-input" placeholder="Cari device (iPhone, Android) atau filter..." />
+      </div>
+    </section>
+
+    <!-- Gallery Grid -->
+    <main class="gallery-container">
+      <div class="gallery-grid" id="admin-gallery">
+        <!-- Rendered by admin.js -->
+      </div>
+      <div class="empty-gallery" id="empty-state" style="display:none;">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+        </svg>
+        <h3>Belum Ada Foto Tersimpan</h3>
+        <p>Ambil foto dari web SnapBooth di HP atau PC, maka foto akan otomatis masuk ke sini.</p>
+      </div>
+    </main>
+  </div>
+
+  <!-- ═══ High-Res Preview Modal ═══ -->
+  <div class="inspector-modal" id="admin-modal">
+    <div class="inspector-card">
+      <button class="modal-close-btn" id="modal-close">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <line x1="18" y1="6" x2="6" y2="18" stroke-width="2"/>
+          <line x1="6" y1="6" x2="18" y2="18" stroke-width="2"/>
+        </svg>
+      </button>
+
+      <img id="modal-img" class="inspector-view" src="" alt="Photo Full View" />
+
+      <div class="modal-meta-row" id="modal-meta">
+        <!-- Meta chips -->
+      </div>
+
+      <div class="inspector-actions">
+        <a class="btn-secondary" id="btn-open-drive" target="_blank" rel="noopener noreferrer" style="display:none;">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+          </svg>
+          Buka di Google Drive
+        </a>
+        <button class="btn-primary" id="btn-modal-dl">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+          </svg>
+          Unduh File Asli
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ OAuth Setup Modal ═══ -->
+  <div class="inspector-modal" id="oauth-modal">
+    <div class="inspector-card oauth-modal-card">
+      <button class="modal-close-btn" id="oauth-modal-close">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <line x1="18" y1="6" x2="6" y2="18" stroke-width="2"/>
+          <line x1="6" y1="6" x2="18" y2="18" stroke-width="2"/>
+        </svg>
+      </button>
+      <h3>Koneksi Google Drive (OAuth 2.0)</h3>
+      <p class="oauth-desc">Supaya foto langsung masuk ke akun Google Drive pribadi kamu (bebas error kuota Service Account):</p>
+      <ol class="oauth-steps">
+        <li>Buka <b>Google Cloud Console</b> ➔ <b>APIs & Services</b> ➔ <b>Credentials</b>.</li>
+        <li>Klik <b>+ Create Credentials</b> ➔ <b>OAuth client ID</b> (Tipe: <b>Web application</b>).</li>
+        <li>Pada <i>Authorized redirect URIs</i> masukkan: <code>http://localhost:3000/api/auth/google/callback</code></li>
+        <li>Salin <b>Client ID</b> & <b>Client Secret</b> ke form di bawah:</li>
+      </ol>
+      <form id="oauth-config-form">
+        <label>Google OAuth Client ID</label>
+        <input type="text" id="oauth-client-id" placeholder="xxxx.apps.googleusercontent.com" required />
+        <label>Google OAuth Client Secret</label>
+        <input type="password" id="oauth-client-secret" placeholder="GOCSPX-xxxx" required />
+        <label>Google Drive Folder ID (Opsional)</label>
+        <input type="text" id="oauth-folder-id" placeholder="1I02aTnWV0gef2MEh5qEOt-Br9UYzg5Mn" />
+        <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:8px;">
+          <button type="button" class="btn-secondary" id="btn-oauth-cancel">Batal</button>
+          <button type="submit" class="btn-primary" id="btn-oauth-save">Simpan & Login ke Google</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="admin.js"></script>
+</body>
+</html>

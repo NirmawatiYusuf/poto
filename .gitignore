@@ -1,0 +1,27 @@
+# Node dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment secrets & tokens
+.env
+.env.local
+.env.*.local
+.tokens.json
+
+# Local certificates & SSL
+.certs/
+*.pem
+*.key
+*.crt
+
+# Local photo captures
+captures/
+
+# Vercel & IDE
+.vercel
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
