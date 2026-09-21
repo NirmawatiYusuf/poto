@@ -1,8 +1,15 @@
 {
   "version": 2,
-  "outputDirectory": "public",
-  "buildCommand": "",
-  "cleanUrls": true,
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/api/$1"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/public/$1"
+    }
+  ],
   "headers": [
     {
       "source": "/api/(.*)",
