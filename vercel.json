@@ -1,9 +1,9 @@
 {
   "version": 2,
+  "cleanUrls": true,
   "functions": {
     "api/*.js": {
-      "maxDuration": 30,
-      "memory": 1024
+      "maxDuration": 30
     }
   },
   "headers": [

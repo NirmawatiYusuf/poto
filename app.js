@@ -23,10 +23,11 @@ const App = (() => {
   let isRingLightActive = false;
   let stripFrameColor = '#ffffff';
 
+  const isBrowser = typeof window !== 'undefined' && typeof location !== 'undefined';
   let localInfo = {
-    localIP: location.hostname || 'localhost',
-    httpUrl: `http://${location.hostname || 'localhost'}:3000`,
-    httpsUrl: `https://${location.hostname || 'localhost'}:3443`
+    localIP: isBrowser ? location.hostname : 'localhost',
+    httpUrl: isBrowser ? `http://${location.hostname}:3000` : 'http://localhost:3000',
+    httpsUrl: isBrowser ? `https://${location.hostname}:3443` : 'https://localhost:3443'
   };
 
   // Audio Context for synthetic sound FX
@@ -395,8 +396,10 @@ const App = (() => {
   }
 
   // Ensure webcam hardware lock is released when tab is closed or refreshed
-  window.addEventListener('beforeunload', stopCamera);
-  window.addEventListener('pagehide', stopCamera);
+  if (typeof window !== 'undefined') {
+    window.addEventListener('beforeunload', stopCamera);
+    window.addEventListener('pagehide', stopCamera);
+  }
 
   async function startCamera(facingMode = 'user') {
     // Check mediaDevices support
@@ -1550,4 +1553,6 @@ const App = (() => {
   return { init };
 })();
 
-document.addEventListener('DOMContentLoaded', App.init);
+if (typeof document !== 'undefined') {
+  document.addEventListener('DOMContentLoaded', App.init);
+}
