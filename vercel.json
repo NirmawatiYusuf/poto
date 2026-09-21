@@ -5,7 +5,16 @@
     { "src": "api/*.js", "use": "@vercel/node" }
   ],
   "routes": [
-    { "src": "/api/(.*)", "dest": "/api/$1" },
+    { "src": "/api/auth/google(.*)", "dest": "/api/oauth.js" },
+    { "src": "/api/auth", "dest": "/api/auth.js" },
+    { "src": "/api/oauth(.*)", "dest": "/api/oauth.js" },
+    { "src": "/api/photos(.*)", "dest": "/api/photos.js" },
+    { "src": "/api/upload(.*)", "dest": "/api/upload.js" },
+    { "src": "/api/info(.*)", "dest": "/api/info.js" },
+    { "src": "/api/(.*)\\.js", "dest": "/api/$1.js" },
+    { "src": "/api/(.*)", "dest": "/api/$1.js" },
+    { "src": "/admin", "dest": "/public/admin.html" },
+    { "src": "/", "dest": "/public/index.html" },
     { "src": "/(.*)", "dest": "/public/$1" }
   ],
   "headers": [
