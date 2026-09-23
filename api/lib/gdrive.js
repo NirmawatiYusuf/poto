@@ -257,9 +257,43 @@ async function getPhotoStream(fileId) {
   return response.data;
 }
 
+async function deletePhoto(fileId) {
+  if (!fileId) throw new Error('File ID is required');
+
+  let deleted = false;
+
+  // 1. Try deleting from Google Drive
+  const client = getDriveClient();
+  if (client) {
+    try {
+      await client.drive.files.delete({
+        fileId: fileId,
+        supportsAllDrives: true
+      });
+      deleted = true;
+    } catch (gdriveErr) {
+      console.warn('[GDRIVE] Delete error:', gdriveErr.message);
+    }
+  }
+
+  // 2. Try deleting from local captures folder
+  try {
+    const localFile = path.join(LOCAL_CAPTURES_DIR, fileId);
+    if (fs.existsSync(localFile)) {
+      await fs.promises.unlink(localFile);
+      deleted = true;
+    }
+  } catch (localErr) {
+    console.warn('[LOCAL] Delete error:', localErr.message);
+  }
+
+  return { success: true, id: fileId, deleted };
+}
+
 module.exports = {
   getDriveClient,
   savePhoto,
   listPhotos,
-  getPhotoStream
+  getPhotoStream,
+  deletePhoto
 };

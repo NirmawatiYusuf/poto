@@ -1,6 +1,6 @@
 # 📸 SnapBooth Studio PRO
 
-> **Web-based Photobooth Studio Modern** dengan 31+ real-time cinematic filters, 4-shot photostrip builder, stiker interaktif, export GIF Boomerang, auto-upload ke Google Drive pribadi, dan Panel Admin rahasia.
+> **Web-based Photobooth Studio Modern** dengan 31+ real-time cinematic filters, photostrip yang jumlah fotonya mengikuti frame pilihan, stiker interaktif, export GIF Boomerang, auto-upload ke Google Drive pribadi, dan Panel Admin.
 
 ---
 
@@ -9,11 +9,11 @@
 - 🎨 **31+ Real-time Preset Filters**: RAW/Natural, Film Vintage (Portra, Fuji, Kodachrome), Black & White Monokrom, Cyberpunk Neon, Retro VHS Glitch, hingga Canvas Multi-Face Duplication.
 - 🎞️ **Multi-mode Shooting**:
   - **Single Shot**: Foto resolusi tinggi dengan framing reticle & rule of thirds grid.
-  - **4-Shot Photostrip**: Pengambilan 4 foto beruntun otomatis dengan countdown timer dan pilihan frame (Classic White, Noir, 35mm Film Roll, Rose Pastel, Vintage Cream) serta custom caption.
+  - **Photostrip Otomatis**: Jumlah jepretan mengikuti slot yang terdeteksi pada frame pilihan, lengkap dengan countdown timer dan custom caption.
 - 🎭 **Aksesoris & Stiker Interaktif**: Tambahkan kacamata, mahkota, telinga kucing, stiker berkilau yang dapat digeser dan diatur langsung di layar.
 - 🔁 **GIF Boomerang Generator**: Buat dan unduh animasi gerak berulang dari hasil foto photostrip.
 - ☁️ **Auto-Sync Google Drive (OAuth 2.0)**: Semua hasil jepretan otomatis tersimpan rapi ke folder Google Drive pribadi Anda tanpa batasan kuota Service Account.
-- 🔒 **Panel Admin Rahasia**: Akses galeri foto dan manajemen cloud hanya untuk pengelola studio tanpa tombol publik yang terlihat oleh pengunjung.
+- 🧰 **Panel Admin**: Kelola galeri foto dan koneksi cloud melalui halaman admin.
 - 📱 **100% Responsif**: Dioptimalkan untuk desktop, tablet (iPad/Android tab), dan perangkat mobile (layar portrait & landscape).
 
 ---
@@ -46,14 +46,9 @@ Server akan berjalan di:
 
 ---
 
-## 🔐 Cara Masuk ke Panel Admin (Secret Access)
+## 🔐 Cara Masuk ke Panel Admin
 
-Untuk menjaga privasi, tombol admin sengaja disembunyikan dari antarmuka publik:
-
-1. **Metode 1 (Klik Logo 3x)**: Klik logo **SnapBooth PRO** di pojok kiri atas sebanyak **3 kali berturut-turut**.
-2. **Metode 2 (Keyboard Shortcut)**: Tekan tombol **`Ctrl` + `Shift` + `A`** pada keyboard.
-3. **Metode 3 (URL Langsung)**: Buka `http://localhost:3000/admin.html` (atau `https://domain-anda.vercel.app/admin.html`).
-4. Masukkan Password Admin (default di `.env`: `123456`).
+Buka `http://localhost:3000/admin.html` (atau `/admin`), klik logo SnapBooth tiga kali, atau tekan `Ctrl` + `Shift` + `A`. PIN lokal bawaan adalah `123456`; kalau `ADMIN_PASSWORD` di `.env` sudah diisi, gunakan PIN tersebut.
 
 ---
 

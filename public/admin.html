@@ -21,9 +21,10 @@
         </svg>
       </div>
       <h2>Akses Panel Admin</h2>
-      <p>Masukkan PIN keamanan untuk melihat hasil foto di cloud.</p>
+      <p>Masukkan PIN admin untuk melihat hasil foto.</p>
+      <p class="pin-hint">PIN default localhost: <strong>123456</strong></p>
       <form id="pin-form">
-        <input type="password" id="pin-input" placeholder="Masukkan PIN (Default: 123456)" maxlength="20" autofocus required />
+        <input type="password" id="pin-input" placeholder="Masukkan PIN admin" maxlength="20" autofocus required />
         <button type="submit" class="btn-primary" id="btn-login">Masuk ke Dashboard</button>
       </form>
       <div class="pin-error" id="pin-error">PIN tidak sesuai. Silakan coba lagi.</div>
@@ -87,7 +88,7 @@
         <span class="stat-value" id="stat-single">0</span>
       </div>
       <div class="stat-card">
-        <span class="stat-label">4-Shot Photostrips</span>
+        <span class="stat-label">Photostrip</span>
         <span class="stat-value" id="stat-strip">0</span>
       </div>
       <div class="stat-card">
@@ -131,35 +132,173 @@
       </div>
     </section>
 
-    <!-- Filter & Controls Toolbar -->
-    <section class="admin-toolbar">
-      <div class="filter-tabs">
-        <button class="filter-tab active" data-type="all">Semua Foto</button>
-        <button class="filter-tab" data-type="single">Single Shot</button>
-        <button class="filter-tab" data-type="strip">Photostrip</button>
-      </div>
-
-      <div class="search-box">
+    <!-- View Switcher -->
+    <div class="admin-view-switcher">
+      <button class="view-tab-btn active" id="tab-btn-gallery">
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="16" height="16">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
         </svg>
-        <input type="text" id="search-input" placeholder="Cari device (iPhone, Android) atau filter..." />
-      </div>
-    </section>
+        Galeri Foto (<span id="tab-count-gallery">0</span>)
+      </button>
+      <button class="view-tab-btn" id="tab-btn-analytics">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="16" height="16">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+        </svg>
+        Statistik & Log Sesi
+      </button>
+    </div>
 
-    <!-- Gallery Grid -->
-    <main class="gallery-container">
-      <div class="gallery-grid" id="admin-gallery">
-        <!-- Rendered by admin.js -->
+    <!-- Gallery View -->
+    <div id="gallery-view">
+      <!-- Filter & Controls Toolbar -->
+      <section class="admin-toolbar">
+        <div class="filter-tabs">
+          <button class="filter-tab active" data-type="all">Semua Foto</button>
+          <button class="filter-tab" data-type="single">Single Shot</button>
+          <button class="filter-tab" data-type="strip">Photostrip</button>
+        </div>
+
+        <div class="search-box">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="16" height="16">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+          </svg>
+          <input type="text" id="search-input" placeholder="Cari device (iPhone, Android) atau filter..." />
+        </div>
+      </section>
+
+      <!-- Gallery Grid -->
+      <main class="gallery-container">
+        <div class="gallery-grid" id="admin-gallery">
+          <!-- Rendered by admin.js -->
+        </div>
+        <div class="empty-gallery" id="empty-state" style="display:none;">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+          </svg>
+          <h3>Belum Ada Foto Tersimpan</h3>
+          <p>Ambil foto dari web SnapBooth di HP atau PC, maka foto akan otomatis masuk ke sini.</p>
+        </div>
+      </main>
+    </div>
+
+    <!-- Analytics & Session Log View -->
+    <div id="analytics-view" style="display:none;">
+      <!-- Key Insights Summary Cards -->
+      <div class="insight-cards-row">
+        <div class="insight-card">
+          <span class="insight-icon">🔥</span>
+          <div class="insight-content">
+            <span class="insight-label">Jam Paling Ramai</span>
+            <span class="insight-value" id="insight-peak-hour">-</span>
+          </div>
+        </div>
+        <div class="insight-card">
+          <span class="insight-icon">🎨</span>
+          <div class="insight-content">
+            <span class="insight-label">Filter Terfavorit</span>
+            <span class="insight-value" id="insight-top-filter">-</span>
+          </div>
+        </div>
+        <div class="insight-card">
+          <span class="insight-icon">📱</span>
+          <div class="insight-content">
+            <span class="insight-label">Perangkat Dominan</span>
+            <span class="insight-value" id="insight-top-device">-</span>
+          </div>
+        </div>
+        <div class="insight-card">
+          <span class="insight-icon">⚡</span>
+          <div class="insight-content">
+            <span class="insight-label">Rasio Strip vs Single</span>
+            <span class="insight-value" id="insight-strip-ratio">-</span>
+          </div>
+        </div>
       </div>
-      <div class="empty-gallery" id="empty-state" style="display:none;">
-        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
-        </svg>
-        <h3>Belum Ada Foto Tersimpan</h3>
-        <p>Ambil foto dari web SnapBooth di HP atau PC, maka foto akan otomatis masuk ke sini.</p>
+
+      <!-- Charts & Distribution Grid -->
+      <div class="analytics-grid">
+        <!-- 1. Hourly Peak Activity (00:00 - 23:00) -->
+        <div class="analytics-card hourly-card">
+          <div class="analytics-card-header">
+            <div>
+              <h3>Jam Sibuk Kunjungan (Peak Hours)</h3>
+              <p class="card-subtitle">Distribusi waktu pengambilan foto berdasarkan jam (00:00 - 23:00)</p>
+            </div>
+            <span class="pill-badge" id="peak-hour-badge">-</span>
+          </div>
+          <div class="hourly-chart-wrapper">
+            <div class="hourly-bars" id="hourly-bars">
+              <!-- 24 bars generated dynamically -->
+            </div>
+            <div class="hourly-labels">
+              <span>00:00</span>
+              <span>03:00</span>
+              <span>06:00</span>
+              <span>09:00</span>
+              <span>12:00</span>
+              <span>15:00</span>
+              <span>18:00</span>
+              <span>21:00</span>
+              <span>23:00</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. Filter Popularity -->
+        <div class="analytics-card">
+          <div class="analytics-card-header">
+            <div>
+              <h3>Filter Terpopuler</h3>
+              <p class="card-subtitle">Preferensi gaya foto pengunjung</p>
+            </div>
+          </div>
+          <div class="breakdown-list" id="filter-breakdown">
+            <!-- dynamic items -->
+          </div>
+        </div>
+
+        <!-- 3. Device & Platform Breakdown -->
+        <div class="analytics-card">
+          <div class="analytics-card-header">
+            <div>
+              <h3>Distribusi Perangkat</h3>
+              <p class="card-subtitle">Smartphone & desktop yang terhubung</p>
+            </div>
+          </div>
+          <div class="breakdown-list" id="device-breakdown">
+            <!-- dynamic items -->
+          </div>
+        </div>
       </div>
-    </main>
+
+      <!-- 4. Session Activity Log Table -->
+      <div class="session-log-card">
+        <div class="analytics-card-header">
+          <div>
+            <h3>Log Aktivitas Sesi Real-Time</h3>
+            <p class="card-subtitle">Riwayat sesi foto terbaru lengkap dengan waktu, filter, dan perangkat</p>
+          </div>
+          <span class="pill-badge" id="session-log-count">0 Sesi</span>
+        </div>
+        <div class="table-responsive">
+          <table class="session-table">
+            <thead>
+              <tr>
+                <th>Waktu Sesi</th>
+                <th>Tipe</th>
+                <th>Filter</th>
+                <th>Perangkat</th>
+                <th>Ukuran</th>
+                <th>File / Aksi</th>
+              </tr>
+            </thead>
+            <tbody id="session-log-tbody">
+              <!-- dynamic rows -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- ═══ High-Res Preview Modal ═══ -->
@@ -185,6 +324,12 @@
           </svg>
           Buka di Google Drive
         </a>
+        <button class="btn-danger" id="btn-modal-delete" title="Hapus Foto dari Cloud">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="16" height="16">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+          </svg>
+          Hapus Foto
+        </button>
         <button class="btn-primary" id="btn-modal-dl">
           <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>

@@ -1,6 +1,6 @@
 /**
  * app.js — SnapBooth Studio Application Engine
- * Pro Camera Engine: Real-time Filters, Web Audio Feedback, 4-Shot Photobooth Strips, Mobile HTTPS Sync
+ * Pro Camera Engine: Real-time Filters, Web Audio Feedback, Frame-Driven Photostrips, Mobile HTTPS Sync
  */
 
 const App = (() => {
@@ -17,11 +17,71 @@ const App = (() => {
   let capturedItems = [];
   let currentCategory = 'all';
   let captureMode = 'single';
-  let isAudioEnabled = true;
+  
+  // Audio Voice & Sound Modes
+  const AUDIO_MODES = [
+    { id: 'voice-id', name: 'Suara Indonesia', icon: '🗣️' },
+    { id: 'voice-en', name: 'Voice English',   icon: '🌐' },
+    { id: 'chime',    name: 'Arcade Chime',    icon: '🎵' },
+    { id: 'beep',     name: 'Beep Klasik',     icon: '🔔' },
+    { id: 'mute',     name: 'Hening',          icon: '🔇' }
+  ];
+  let currentAudioModeIndex = 0;
+  let currentStripFrames = []; // Holds 4 frames for review & live retake
+  let countdownRecordedFrames = []; // ImageData frames recorded during countdown for GIF
+  let allStripCountdownFrames = []; // Accumulated countdown frames across strip shots
+  let _gifRecordCanvas = null;
+  let _gifRecordCtx = null;
+  let deferredPwaPrompt = null;
+
   let currentRatio = '4:3';
   let isGridVisible = false;
   let isRingLightActive = false;
   let stripFrameColor = '#ffffff';
+
+  // ─── Strip Templates & Chroma Key Custom Presets ───
+  const DEFAULT_TEMPLATES = [
+    {
+      id: 'denim-scrapbook',
+      name: 'Denim Scrapbook',
+      type: 'png-overlay',
+      src: '/templates/frame-denim.png',
+      totalShots: 4,
+      desc: '4 Foto • Tekstur Jeans, Robekan Kertas & Stiker',
+      preview: '/templates/frame-denim.png'
+    },
+    {
+      id: 'classic-white',
+      name: 'Classic White',
+      type: 'preset-color',
+      color: '#ffffff',
+      totalShots: 4,
+      desc: '4 Foto • Strip Putih Minimalis & Elegan'
+    },
+    {
+      id: 'film-noir',
+      name: 'Vintage 35mm Film',
+      type: 'preset-color',
+      color: 'film',
+      totalShots: 4,
+      desc: '4 Foto • Lubang Sprocket 35mm Hitam Klasik'
+    },
+    {
+      id: 'pastel-peach',
+      name: 'Pastel Dream',
+      type: 'preset-color',
+      color: '#fed7aa',
+      totalShots: 3,
+      desc: '3 Foto • Soft Peach Pastel Estetik'
+    }
+  ];
+
+  let customTemplates = [];
+  let activeTemplateId = 'denim-scrapbook';
+  let hasChosenFrame = false;
+  let isAwaitingFrameCapture = false;
+  let scannedUploadTemplate = null;
+  const _templateCache = {};
 
   const isBrowser = typeof window !== 'undefined' && typeof location !== 'undefined';
   let localInfo = {
@@ -44,18 +104,16 @@ const App = (() => {
     ctx = canvasEl.getContext('2d', { willReadFrequently: true });
 
     initAudio();
+    updateAudioButtonUI();
+    loadCustomTemplates();
+    initFrameSelector();
     checkSecurityContext();
     fetchServerInfo();
     bindEvents();
     renderFilterGrid('all');
     updateHudInfo();
 
-    // Auto-attempt camera start so user doesn't need to manually click
-    try {
-      await startCamera();
-    } catch (e) {
-      console.log('Camera awaiting user trigger:', e);
-    }
+    // Ask for camera access only after the visitor chooses to start the camera.
   }
 
   // ─── Check Secure Context for Mobile / Local Network ───
@@ -102,8 +160,42 @@ const App = (() => {
     }
   }
 
+  function speakVoice(text, lang = 'id-ID') {
+    const mode = AUDIO_MODES[currentAudioModeIndex].id;
+    if (mode === 'mute' || !('speechSynthesis' in window)) return;
+    try {
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.lang = lang;
+      utter.rate = 1.15;
+      utter.pitch = 1.1;
+      utter.volume = 1.0;
+      window.speechSynthesis.speak(utter);
+    } catch (_) {}
+  }
+
+  function playChime(freq, duration = 0.16) {
+    const mode = AUDIO_MODES[currentAudioModeIndex].id;
+    if (!audioCtx || mode === 'mute') return;
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    try {
+      const t = audioCtx.currentTime;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(0.2, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + duration);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(t);
+      osc.stop(t + duration);
+    } catch (_) {}
+  }
+
   function playSound(type) {
-    if (!isAudioEnabled || !audioCtx) return;
+    const mode = AUDIO_MODES[currentAudioModeIndex].id;
+    if (mode === 'mute' || !audioCtx) return;
     if (audioCtx.state === 'suspended') {
       audioCtx.resume();
     }
@@ -117,7 +209,7 @@ const App = (() => {
       osc.frequency.setValueAtTime(880, t);
       osc.frequency.exponentialRampToValueAtTime(440, t + 0.08);
 
-      gain.gain.setValueAtTime(0.15, t);
+      gain.gain.setValueAtTime(0.12, t);
       gain.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
 
       osc.connect(gain);
@@ -129,7 +221,7 @@ const App = (() => {
       const gain = audioCtx.createGain();
       osc.type = 'sine';
       osc.frequency.setValueAtTime(1760, t);
-      gain.gain.setValueAtTime(0.2, t);
+      gain.gain.setValueAtTime(0.18, t);
       gain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
 
       osc.connect(gain);
@@ -187,8 +279,42 @@ const App = (() => {
     // Ring Light / Screen Flash
     $('#btn-ring-light').addEventListener('click', toggleRingLight);
 
-    // Audio Mute Toggle
-    $('#btn-sound').addEventListener('click', toggleAudio);
+    // Audio Sound Mode Cycle
+    $('#btn-sound').addEventListener('click', cycleAudioMode);
+
+    // Strip Review & Live Retake Actions
+    const btnRetakeAll = $('#btn-retake-all');
+    if (btnRetakeAll) {
+      btnRetakeAll.addEventListener('click', () => {
+        closeStripReviewModal();
+        triggerCapture();
+      });
+    }
+
+    const btnStripConfirm = $('#btn-strip-confirm');
+    if (btnStripConfirm) {
+      btnStripConfirm.addEventListener('click', finalizeStripCapture);
+    }
+
+    // PWA Install Prompt Handler
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPwaPrompt = e;
+      const btnInstall = $('#btn-pwa-install');
+      if (btnInstall) {
+        btnInstall.style.display = 'inline-flex';
+        btnInstall.addEventListener('click', async () => {
+          if (deferredPwaPrompt) {
+            deferredPwaPrompt.prompt();
+            const { outcome } = await deferredPwaPrompt.userChoice;
+            if (outcome === 'accepted') {
+              btnInstall.style.display = 'none';
+            }
+            deferredPwaPrompt = null;
+          }
+        });
+      }
+    });
 
     // Mobile HTTPS Modal (Optional local dev)
     const btnMobileModalOpen = $('#btn-mobile-modal-open');
@@ -262,15 +388,24 @@ const App = (() => {
       });
     }
 
-    // Mode Switcher (Single vs 4-Strip)
+    // Mode Switcher (Single vs Photostrip)
     $$('.mode-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         $$('.mode-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         captureMode = btn.dataset.mode;
         updateModeUI();
+        if (captureMode === 'strip') {
+          openFrameSelectorModal(false);
+        }
       });
     });
+
+    // Frame Selector Console Button
+    const btnFrameSelect = $('#btn-frame-select');
+    if (btnFrameSelect) {
+      btnFrameSelect.addEventListener('click', () => openFrameSelectorModal(false));
+    }
 
     // Preset Category Tabs
     $$('.category-tab').forEach(tab => {
@@ -336,13 +471,26 @@ const App = (() => {
       btnClearStk.addEventListener('click', clearAllStickers);
     }
 
-    // Modal GIF Boomerang Export
+    // Modal Countdown Video Download
+    const btnCountdownGif = $('#btn-modal-countdown-gif');
+    if (btnCountdownGif) {
+      btnCountdownGif.addEventListener('click', () => {
+        const item = capturedItems.find(p => p.id == activeInspectorItemId);
+        if (item && item.countdownVideoUrl) {
+          downloadFile(item.countdownVideoUrl, `snapbooth-countdown-${item.id}.${item.countdownVideoExt || 'webm'}`);
+        }
+      });
+    }
+
+    // Modal Boomerang Video Download
     const btnModalGif = $('#btn-modal-gif');
     if (btnModalGif) {
       btnModalGif.addEventListener('click', () => {
         const item = capturedItems.find(p => p.id == activeInspectorItemId);
-        if (item && item.rawFrames) {
-          generateBoomerangGif(item.rawFrames);
+        if (item && item.boomerangVideoUrl) {
+          downloadFile(item.boomerangVideoUrl, `snapbooth-boomerang-${item.id}.${item.boomerangVideoExt || 'webm'}`);
+        } else if (item && item.rawFrames) {
+          generateBoomerangVideo(item.rawFrames);
         }
       });
     }
@@ -618,54 +766,115 @@ const App = (() => {
   // ─── Filter Selection & HUD ───
   let _cachedThumbnailBase = null;
 
+  const THUMB_W = 160;
+  const THUMB_H = 112;
+
   function getThumbnailBase() {
     if (_cachedThumbnailBase) return _cachedThumbnailBase;
 
     const base = document.createElement('canvas');
-    base.width = 80;
-    base.height = 56;
+    base.width = THUMB_W;
+    base.height = THUMB_H;
     const bCtx = base.getContext('2d', { willReadFrequently: true });
+    bCtx.scale(2, 2);
 
-    // Soft studio backdrop
+    // A crisp illustrated portrait gives every filter a readable preview
+    // before the visitor grants camera access.
     const bgGrad = bCtx.createLinearGradient(0, 0, 80, 56);
-    bgGrad.addColorStop(0, '#334155');
-    bgGrad.addColorStop(1, '#0f172a');
+    bgGrad.addColorStop(0, '#f4b67a');
+    bgGrad.addColorStop(0.55, '#bc7183');
+    bgGrad.addColorStop(1, '#514b78');
     bCtx.fillStyle = bgGrad;
     bCtx.fillRect(0, 0, 80, 56);
 
-    // Shoulders
-    bCtx.fillStyle = '#6366f1';
+    // Offset arch and a little afternoon sun, like a printed portrait card.
+    bCtx.fillStyle = 'rgba(255,246,211,.28)';
     bCtx.beginPath();
-    bCtx.ellipse(40, 58, 28, 14, 0, 0, Math.PI * 2);
+    bCtx.roundRect(10, 5, 60, 54, 28, 28, 4, 4);
+    bCtx.fill();
+    bCtx.fillStyle = 'rgba(255,229,135,.9)';
+    bCtx.beginPath();
+    bCtx.arc(59, 15, 9, 0, Math.PI * 2);
     bCtx.fill();
 
-    // Neck
-    bCtx.fillStyle = '#fed7aa';
-    bCtx.fillRect(36, 30, 8, 10);
-
-    // Face
-    bCtx.fillStyle = '#fde047';
+    // Jacket and neck
+    bCtx.fillStyle = '#334d64';
     bCtx.beginPath();
-    bCtx.ellipse(40, 24, 13, 15, 0, 0, Math.PI * 2);
+    bCtx.moveTo(15, 57);
+    bCtx.quadraticCurveTo(19, 40, 32, 38);
+    bCtx.lineTo(48, 38);
+    bCtx.quadraticCurveTo(63, 41, 67, 57);
+    bCtx.closePath();
+    bCtx.fill();
+    bCtx.fillStyle = '#ed8d72';
+    bCtx.beginPath();
+    bCtx.moveTo(35, 34);
+    bCtx.lineTo(45, 34);
+    bCtx.lineTo(47, 43);
+    bCtx.quadraticCurveTo(40, 49, 33, 43);
+    bCtx.closePath();
     bCtx.fill();
 
-    // Hair
-    bCtx.fillStyle = '#1e1b4b';
+    // Face with soft cheek light
+    bCtx.fillStyle = '#f3bd91';
     bCtx.beginPath();
-    bCtx.arc(40, 19, 14, Math.PI, 0, false);
+    bCtx.moveTo(28, 19);
+    bCtx.quadraticCurveTo(29, 8, 40, 8);
+    bCtx.quadraticCurveTo(53, 8, 52, 23);
+    bCtx.lineTo(49, 33);
+    bCtx.quadraticCurveTo(40, 42, 31, 33);
+    bCtx.closePath();
     bCtx.fill();
 
-    // Eyes
-    bCtx.fillStyle = '#0f172a';
-    bCtx.fillRect(35, 23, 3, 3);
-    bCtx.fillRect(43, 23, 3, 3);
-
-    // Smile
-    bCtx.strokeStyle = '#e11d48';
-    bCtx.lineWidth = 1.2;
+    // Swept fringe, tucked behind the ear
+    bCtx.fillStyle = '#293246';
     bCtx.beginPath();
-    bCtx.arc(40, 29, 3.5, 0, Math.PI);
+    bCtx.moveTo(27, 22);
+    bCtx.quadraticCurveTo(24, 6, 39, 5);
+    bCtx.quadraticCurveTo(54, 5, 54, 18);
+    bCtx.quadraticCurveTo(47, 13, 40, 15);
+    bCtx.quadraticCurveTo(34, 15, 27, 22);
+    bCtx.closePath();
+    bCtx.fill();
+    bCtx.beginPath();
+    bCtx.moveTo(27, 16);
+    bCtx.quadraticCurveTo(23, 31, 30, 36);
+    bCtx.quadraticCurveTo(27, 25, 33, 20);
+    bCtx.fill();
+
+    // Eyebrows, eyes, nose and a tiny crooked smile
+    bCtx.strokeStyle = '#503d47';
+    bCtx.lineWidth = 1.1;
+    bCtx.lineCap = 'round';
+    bCtx.beginPath();
+    bCtx.moveTo(33, 22); bCtx.lineTo(37, 21.5);
+    bCtx.moveTo(43, 21.5); bCtx.lineTo(47, 22.2);
     bCtx.stroke();
+    bCtx.fillStyle = '#282d39';
+    bCtx.beginPath(); bCtx.ellipse(35, 24, 1, 1.35, 0, 0, Math.PI * 2); bCtx.fill();
+    bCtx.beginPath(); bCtx.ellipse(45, 24, 1, 1.35, 0, 0, Math.PI * 2); bCtx.fill();
+    bCtx.strokeStyle = 'rgba(142,83,75,.65)';
+    bCtx.beginPath(); bCtx.moveTo(40, 24); bCtx.lineTo(39, 28); bCtx.stroke();
+    bCtx.strokeStyle = '#a64f61';
+    bCtx.lineWidth = 1.4;
+    bCtx.beginPath(); bCtx.moveTo(37, 32); bCtx.quadraticCurveTo(41, 35, 44, 31.5); bCtx.stroke();
+    bCtx.fillStyle = 'rgba(225,111,112,.35)';
+    bCtx.beginPath(); bCtx.ellipse(33, 28, 3, 1.5, 0, 0, Math.PI * 2); bCtx.fill();
+    bCtx.beginPath(); bCtx.ellipse(47, 28, 3, 1.5, 0, 0, Math.PI * 2); bCtx.fill();
+
+    // Simple jacket seam and deterministic paper grain
+    bCtx.strokeStyle = 'rgba(246,206,160,.75)';
+    bCtx.lineWidth = .8;
+    bCtx.beginPath(); bCtx.moveTo(40, 44); bCtx.lineTo(40, 56); bCtx.stroke();
+    let grain = 17;
+    for (let i = 0; i < 90; i++) {
+      grain = (grain * 9301 + 49297) % 233280;
+      const x = (grain / 233280) * 80;
+      grain = (grain * 9301 + 49297) % 233280;
+      const y = (grain / 233280) * 56;
+      bCtx.fillStyle = i % 2 ? 'rgba(255,255,255,.12)' : 'rgba(35,28,47,.09)';
+      bCtx.fillRect(x, y, .45, .45);
+    }
 
     _cachedThumbnailBase = base;
     return base;
@@ -675,14 +884,14 @@ const App = (() => {
     let sourceBase = getThumbnailBase();
     if (stream && videoEl.videoWidth > 0) {
       const snap = document.createElement('canvas');
-      snap.width = 80;
-      snap.height = 56;
+      snap.width = THUMB_W;
+      snap.height = THUMB_H;
       const sCtx = snap.getContext('2d', { willReadFrequently: true });
       if (isMirrored) {
-        sCtx.translate(80, 0);
+        sCtx.translate(THUMB_W, 0);
         sCtx.scale(-1, 1);
       }
-      sCtx.drawImage(videoEl, 0, 0, 80, 56);
+      sCtx.drawImage(videoEl, 0, 0, THUMB_W, THUMB_H);
       sourceBase = snap;
     }
 
@@ -692,23 +901,23 @@ const App = (() => {
       const canvas = document.getElementById(`thumb-${f.id}`);
       if (!canvas) return;
       const tCtx = canvas.getContext('2d', { willReadFrequently: true });
-      tCtx.clearRect(0, 0, 80, 56);
+      tCtx.clearRect(0, 0, THUMB_W, THUMB_H);
 
       try {
         if (Filters.isCanvasFilter(f.id)) {
-          Filters.applyCanvas(f.id, tCtx, sourceBase, 80, 56, false);
+          Filters.applyCanvas(f.id, tCtx, sourceBase, THUMB_W, THUMB_H, false);
         } else if (Filters.isGpuFilter(f.id)) {
-          Filters.applyGpu(f.id, tCtx, sourceBase, 80, 56, false);
+          Filters.applyGpu(f.id, tCtx, sourceBase, THUMB_W, THUMB_H, false);
         } else {
-          tCtx.drawImage(sourceBase, 0, 0, 80, 56);
+          tCtx.drawImage(sourceBase, 0, 0, THUMB_W, THUMB_H);
           if (f.id !== 'normal') {
-            const imgData = tCtx.getImageData(0, 0, 80, 56);
+            const imgData = tCtx.getImageData(0, 0, THUMB_W, THUMB_H);
             const filtered = Filters.apply(f.id, imgData);
             tCtx.putImageData(filtered, 0, 0);
           }
         }
       } catch (e) {
-        tCtx.drawImage(sourceBase, 0, 0, 80, 56);
+        tCtx.drawImage(sourceBase, 0, 0, THUMB_W, THUMB_H);
       }
     });
   }
@@ -724,7 +933,7 @@ const App = (() => {
            data-filter="${f.id}"
            id="preset-${f.id}">
         <div class="preset-preview">
-          <canvas class="preset-thumb-canvas" id="thumb-${f.id}" width="80" height="56"></canvas>
+          <canvas class="preset-thumb-canvas" id="thumb-${f.id}" width="${THUMB_W}" height="${THUMB_H}"></canvas>
           <span class="preset-code-badge">${f.code}</span>
         </div>
         <div class="preset-details">
@@ -850,27 +1059,532 @@ const App = (() => {
     }
   }
 
-  function toggleAudio() {
-    isAudioEnabled = !isAudioEnabled;
+  function cycleAudioMode() {
+    currentAudioModeIndex = (currentAudioModeIndex + 1) % AUDIO_MODES.length;
+    updateAudioButtonUI();
+    const mode = AUDIO_MODES[currentAudioModeIndex];
+    if (mode.id === 'voice-id') speakVoice('Senyum!', 'id-ID');
+    else if (mode.id === 'voice-en') speakVoice('Smile!', 'en-US');
+    else if (mode.id === 'chime') playChime(784, 0.25);
+    else if (mode.id === 'beep') playSound('tick');
+  }
+
+  function updateAudioButtonUI() {
     const soundBtn = $('#btn-sound');
-    soundBtn.classList.toggle('active', !isAudioEnabled);
-    soundBtn.title = isAudioEnabled ? 'Mute Sound' : 'Unmute Sound';
+    if (!soundBtn) return;
+    const mode = AUDIO_MODES[currentAudioModeIndex];
+    soundBtn.classList.toggle('active', mode.id !== 'mute');
+    soundBtn.title = `Suara: ${mode.name} (Klik untuk ganti)`;
+    
+    let badge = soundBtn.querySelector('.audio-mode-badge');
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.className = 'audio-mode-badge';
+      soundBtn.appendChild(badge);
+    }
+    badge.textContent = mode.icon;
+  }
+
+  // ─── Custom Template & Chroma Key Scanner Engine ───
+  function scanChromaKeySlots(imgOrCanvas) {
+    const canvas = document.createElement('canvas');
+    canvas.width = imgOrCanvas.naturalWidth || imgOrCanvas.width;
+    canvas.height = imgOrCanvas.naturalHeight || imgOrCanvas.height;
+    const sCtx = canvas.getContext('2d', { willReadFrequently: true });
+    sCtx.drawImage(imgOrCanvas, 0, 0);
+
+    const imgData = sCtx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imgData.data;
+    const width = canvas.width;
+    const height = canvas.height;
+
+    const mask = new Uint8Array(width * height);
+    let totalChroma = 0;
+
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const a = data[i + 3];
+
+      if (a < 120) continue;
+
+      // Pure Magenta (#FF00FF / Pink Stabilo)
+      const isMagenta = (r > 185 && b > 185 && g < 80);
+      // Neon Green (#00FF00 / Chroma Green)
+      const isGreen = (g > 185 && r < 80 && b < 80);
+      // Bright Solid Red (#FE2623 / #FF0000)
+      const isRed = (r > 200 && g < 70 && b < 70);
+
+      if (isMagenta || isGreen || isRed) {
+        mask[i / 4] = 1;
+        totalChroma++;
+      }
+    }
+
+    if (totalChroma < 400) {
+      return { slots: [], canvasWithHoles: canvas, width, height };
+    }
+
+    const visited = new Uint8Array(width * height);
+    const blobs = [];
+    const minBlobSize = Math.max(1000, Math.round((width * height) * 0.003));
+    const step = 4;
+
+    for (let y = 0; y < height; y += step) {
+      for (let x = 0; x < width; x += step) {
+        const idx = y * width + x;
+        if (mask[idx] === 1 && !visited[idx]) {
+          let minX = x, maxX = x, minY = y, maxY = y;
+          let count = 0;
+          const queue = [idx];
+          visited[idx] = 1;
+
+          while (queue.length > 0) {
+            const curr = queue.pop();
+            const cx = curr % width;
+            const cy = Math.floor(curr / width);
+            count++;
+
+            if (cx < minX) minX = cx;
+            if (cx > maxX) maxX = cx;
+            if (cy < minY) minY = cy;
+            if (cy > maxY) maxY = cy;
+
+            const neighbors = [
+              (cy > 0) ? curr - width : -1,
+              (cy < height - 1) ? curr + width : -1,
+              (cx > 0) ? curr - 1 : -1,
+              (cx < width - 1) ? curr + 1 : -1
+            ];
+
+            for (let n = 0; n < neighbors.length; n++) {
+              const ni = neighbors[n];
+              if (ni !== -1 && mask[ni] === 1 && !visited[ni]) {
+                visited[ni] = 1;
+                queue.push(ni);
+              }
+            }
+          }
+
+          if (count >= minBlobSize) {
+            const bw = maxX - minX + 1;
+            const bh = maxY - minY + 1;
+            if (bw > width * 0.12 && bh > height * 0.04) {
+              blobs.push({
+                x: minX,
+                y: minY,
+                width: bw,
+                height: bh,
+                pixelCount: count
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // Sort vertically from top to bottom
+    blobs.sort((a, b) => a.y - b.y);
+
+    // Erase chroma pixels on canvas to make holes transparent
+    for (let i = 0; i < data.length; i += 4) {
+      if (mask[i / 4] === 1) {
+        data[i + 3] = 0;
+      }
+    }
+    sCtx.putImageData(imgData, 0, 0);
+
+    return {
+      slots: blobs,
+      canvasWithHoles: canvas,
+      width,
+      height
+    };
+  }
+
+  function drawScannerPreview(canvas, img, slots) {
+    canvas.width = img.naturalWidth || img.width;
+    canvas.height = img.naturalHeight || img.height;
+    const pCtx = canvas.getContext('2d');
+    pCtx.drawImage(img, 0, 0);
+
+    slots.forEach((slot, idx) => {
+      pCtx.save();
+      pCtx.strokeStyle = '#06b6d4';
+      pCtx.lineWidth = Math.max(6, Math.round(canvas.width * 0.01));
+      pCtx.shadowColor = '#06b6d4';
+      pCtx.shadowBlur = 14;
+      pCtx.strokeRect(slot.x, slot.y, slot.width, slot.height);
+      pCtx.restore();
+
+      pCtx.fillStyle = 'rgba(6, 182, 212, 0.22)';
+      pCtx.fillRect(slot.x, slot.y, slot.width, slot.height);
+
+      const badgeR = Math.max(22, Math.round(slot.width * 0.08));
+      const bx = slot.x + slot.width / 2;
+      const by = slot.y + slot.height / 2;
+
+      pCtx.fillStyle = '#06b6d4';
+      pCtx.beginPath();
+      pCtx.arc(bx, by, badgeR, 0, Math.PI * 2);
+      pCtx.fill();
+
+      pCtx.fillStyle = '#ffffff';
+      pCtx.font = `bold ${Math.round(badgeR * 1.1)}px "Plus Jakarta Sans", sans-serif`;
+      pCtx.textAlign = 'center';
+      pCtx.textBaseline = 'middle';
+      pCtx.fillText(String(idx + 1), bx, by);
+    });
+  }
+
+  function loadCustomTemplates() {
+    try {
+      const raw = localStorage.getItem('snapbooth_custom_templates');
+      if (raw) {
+        customTemplates = JSON.parse(raw) || [];
+      }
+    } catch (_) {}
+  }
+
+  function saveCustomTemplate(template) {
+    customTemplates.push(template);
+    try {
+      localStorage.setItem('snapbooth_custom_templates', JSON.stringify(customTemplates));
+    } catch (e) {
+      console.warn('Storage warning when saving template:', e);
+    }
+  }
+
+  function deleteCustomTemplate(id) {
+    customTemplates = customTemplates.filter(t => t.id !== id);
+    try {
+      localStorage.setItem('snapbooth_custom_templates', JSON.stringify(customTemplates));
+    } catch (_) {}
+    if (activeTemplateId === id) {
+      activeTemplateId = 'denim-scrapbook';
+    }
+    renderFramePresets();
+    updateModeUI();
+  }
+
+  function getAllTemplates() {
+    return [...DEFAULT_TEMPLATES, ...customTemplates];
+  }
+
+  function getActiveTemplate() {
+    const all = getAllTemplates();
+    return all.find(t => t.id === activeTemplateId) || DEFAULT_TEMPLATES[0];
+  }
+
+  function openFrameSelectorModal(triggerCaptureAfter = false) {
+    isAwaitingFrameCapture = triggerCaptureAfter;
+    const modal = $('#frame-selector-modal');
+    if (!modal) return;
+    renderFramePresets();
+    modal.classList.add('active');
+  }
+
+  function closeFrameSelectorModal() {
+    const modal = $('#frame-selector-modal');
+    if (modal) modal.classList.remove('active');
+    isAwaitingFrameCapture = false;
+  }
+
+  function renderFramePresets() {
+    const grid = $('#frame-preset-grid');
+    if (!grid) return;
+
+    const all = getAllTemplates();
+    const active = getActiveTemplate();
+
+    const badgeEl = $('#selected-frame-badge');
+    const descEl = $('#selected-frame-desc');
+    if (badgeEl) badgeEl.textContent = `${active.totalShots || 4} Foto`;
+    if (descEl) descEl.textContent = `${active.name} — ${active.totalShots || 4} Jepretan Otomatis`;
+
+    grid.innerHTML = all.map(t => {
+      const isAct = t.id === activeTemplateId;
+      const isCustom = !!t.isCustom;
+      let previewContent = '';
+
+      if (t.type === 'png-overlay') {
+        previewContent = `<img src="${t.preview || t.src}" alt="${t.name}" class="frame-preview-img" />`;
+      } else if (t.color === 'film') {
+        previewContent = `
+          <div style="width:100%; height:100%; background:#0f1115; display:flex; flex-direction:column; justify-content:space-evenly; align-items:center; padding:10px 0; border:1px solid #334155;">
+            <div style="width:75%; height:20%; background:#1e293b; border-radius:4px;"></div>
+            <div style="width:75%; height:20%; background:#1e293b; border-radius:4px;"></div>
+            <div style="width:75%; height:20%; background:#1e293b; border-radius:4px;"></div>
+            <div style="width:75%; height:20%; background:#1e293b; border-radius:4px;"></div>
+          </div>
+        `;
+      } else {
+        const slotH = t.totalShots === 3 ? '26%' : '20%';
+        const gradients = [
+          'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+          'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
+          'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
+          'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)'
+        ];
+        let slotsHtml = '';
+        for (let s = 0; s < (t.totalShots || 4); s++) {
+          slotsHtml += `<div style="width:75%; height:${slotH}; background:${gradients[s % gradients.length]}; border-radius:4px; opacity:0.85;"></div>`;
+        }
+        previewContent = `
+          <div style="width:100%; height:100%; background:${t.color || '#fff'}; display:flex; flex-direction:column; justify-content:space-evenly; align-items:center; padding:10px 0; border:1px solid rgba(255,255,255,0.15); border-radius:6px;">
+            ${slotsHtml}
+          </div>
+        `;
+      }
+
+      return `
+        <div class="frame-item-card ${isAct ? 'active' : ''}" data-id="${t.id}">
+          <div class="frame-preview-box">
+            ${previewContent}
+          </div>
+          <div class="frame-meta">
+            <span class="frame-name" title="${t.name}">${t.name}</span>
+            <div class="frame-badge-row">
+              <span class="frame-shots-badge">${t.totalShots || 4} Shot</span>
+              ${isCustom ? `
+                <button class="btn-delete-custom-frame" data-id="${t.id}" title="Hapus Template Kustom">🗑️</button>
+              ` : ''}
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    grid.querySelectorAll('.frame-item-card').forEach(card => {
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('.btn-delete-custom-frame')) return;
+        activeTemplateId = card.dataset.id;
+        hasChosenFrame = true;
+        renderFramePresets();
+        updateModeUI();
+      });
+    });
+
+    grid.querySelectorAll('.btn-delete-custom-frame').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        if (confirm('Hapus template kustom ini?')) {
+          deleteCustomTemplate(id);
+        }
+      });
+    });
+  }
+
+  function initFrameSelector() {
+    renderFramePresets();
+    updateModeUI();
+
+    const btnClose = $('#btn-close-frame-modal');
+    if (btnClose) btnClose.addEventListener('click', closeFrameSelectorModal);
+
+    const modal = $('#frame-selector-modal');
+    if (modal) {
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeFrameSelectorModal();
+      });
+    }
+
+    const tabPresets = $('#tab-frame-presets');
+    const tabUpload = $('#tab-frame-upload');
+    const contentPresets = $('#frame-presets-content');
+    const contentUpload = $('#frame-upload-content');
+
+    if (tabPresets && tabUpload) {
+      tabPresets.addEventListener('click', () => {
+        tabPresets.classList.add('active');
+        tabUpload.classList.remove('active');
+        contentPresets.style.display = 'flex';
+        contentUpload.style.display = 'none';
+      });
+
+      tabUpload.addEventListener('click', () => {
+        tabUpload.classList.add('active');
+        tabPresets.classList.remove('active');
+        contentPresets.style.display = 'none';
+        contentUpload.style.display = 'flex';
+      });
+    }
+
+    const btnConfirm = $('#btn-confirm-frame');
+    if (btnConfirm) {
+      btnConfirm.addEventListener('click', () => {
+        hasChosenFrame = true;
+        closeFrameSelectorModal();
+        updateModeUI();
+        if (isAwaitingFrameCapture) {
+          isAwaitingFrameCapture = false;
+          triggerCapture();
+        }
+      });
+    }
+
+    // Upload & Dropzone Handling
+    const dropzone = $('#frame-dropzone');
+    const fileInput = $('#frame-file-input');
+    const btnBrowse = $('#btn-browse-frame');
+
+    if (dropzone && fileInput) {
+      if (btnBrowse) {
+        btnBrowse.addEventListener('click', (e) => {
+          e.stopPropagation();
+          fileInput.click();
+        });
+      }
+
+      dropzone.addEventListener('click', () => fileInput.click());
+
+      dropzone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropzone.classList.add('dragover');
+      });
+
+      dropzone.addEventListener('dragleave', () => {
+        dropzone.classList.remove('dragover');
+      });
+
+      dropzone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('dragover');
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+          handleFrameUpload(e.dataTransfer.files[0]);
+        }
+      });
+
+      fileInput.addEventListener('change', (e) => {
+        if (e.target.files && e.target.files.length > 0) {
+          handleFrameUpload(e.target.files[0]);
+        }
+      });
+    }
+
+    const btnSaveCustom = $('#btn-save-custom-frame');
+    if (btnSaveCustom) {
+      btnSaveCustom.addEventListener('click', () => {
+        if (!scannedUploadTemplate) {
+          alert('Silakan upload file PNG frame terlebih dahulu');
+          return;
+        }
+        const nameInput = $('#custom-frame-name');
+        const customName = (nameInput && nameInput.value.trim()) || `Custom Frame (${scannedUploadTemplate.totalShots}x)`;
+
+        const newTemplate = {
+          id: 'custom-' + Date.now(),
+          name: customName,
+          type: 'png-overlay',
+          src: scannedUploadTemplate.rawSrc,
+          preview: scannedUploadTemplate.previewDataUrl,
+          processedOverlayDataUrl: scannedUploadTemplate.overlayDataUrl,
+          slots: scannedUploadTemplate.slots,
+          totalShots: scannedUploadTemplate.totalShots,
+          desc: `${scannedUploadTemplate.totalShots} Foto • Custom Frame Upload`,
+          isCustom: true
+        };
+
+        saveCustomTemplate(newTemplate);
+        activeTemplateId = newTemplate.id;
+        hasChosenFrame = true;
+
+        scannedUploadTemplate = null;
+        const previewCard = $('#scanner-preview-card');
+        if (previewCard) previewCard.style.display = 'none';
+        if (nameInput) nameInput.value = '';
+
+        if (tabPresets) tabPresets.click();
+        renderFramePresets();
+        updateModeUI();
+      });
+    }
+  }
+
+  function handleFrameUpload(file) {
+    if (!file || !file.type.startsWith('image/')) {
+      alert('Mohon pilih file gambar berformat PNG / JPEG');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const rawSrc = e.target.result;
+      const img = new Image();
+      img.onload = () => {
+        const scanRes = scanChromaKeySlots(img);
+        if (!scanRes.slots || scanRes.slots.length === 0) {
+          alert('⚠️ Tidak ditemukan kotak foto dengan warna Pure Magenta (#FF00FF), Hijau Neon (#00FF00), atau Merah Solid (#FF0000) pada gambar ini.\n\nPastikan kotak tempat foto diberi warna solid tanpa gradasi.');
+          return;
+        }
+
+        const previewCanvas = $('#scanner-canvas');
+        if (previewCanvas) {
+          drawScannerPreview(previewCanvas, img, scanRes.slots);
+        }
+
+        const previewDataUrl = previewCanvas ? previewCanvas.toDataURL('image/png') : rawSrc;
+        const overlayDataUrl = scanRes.canvasWithHoles.toDataURL('image/png');
+
+        scannedUploadTemplate = {
+          rawSrc,
+          previewDataUrl,
+          overlayDataUrl,
+          slots: scanRes.slots,
+          totalShots: scanRes.slots.length,
+          width: scanRes.width,
+          height: scanRes.height
+        };
+
+        const statusText = $('#scanner-status-text');
+        if (statusText) {
+          statusText.innerHTML = `✅ <b>Berhasil Terdeteksi!</b> Ditemukan <b>${scanRes.slots.length} kolom foto</b> pada template ini.`;
+        }
+
+        const nameInput = $('#custom-frame-name');
+        if (nameInput) {
+          nameInput.value = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
+        }
+
+        const previewCard = $('#scanner-preview-card');
+        if (previewCard) previewCard.style.display = 'flex';
+      };
+      img.src = rawSrc;
+    };
+    reader.readAsDataURL(file);
   }
 
   function updateModeUI() {
     const shutter = $('#btn-shutter');
+    const btnFrame = $('#btn-frame-select');
     if (captureMode === 'strip') {
       shutter.classList.add('strip-mode');
-      shutter.setAttribute('data-tooltip', 'Ambil 4-Foto Strip');
+      const tmpl = getActiveTemplate();
+      const shots = tmpl.totalShots || 4;
+      shutter.setAttribute('data-tooltip', `Ambil ${shots}-Foto Strip`);
+      if (btnFrame) {
+        btnFrame.style.display = 'inline-flex';
+        const label = $('#active-frame-label');
+        if (label) label.textContent = `${tmpl.name.split(' ')[0]} (${shots}x)`;
+      }
     } else {
       shutter.classList.remove('strip-mode');
       shutter.setAttribute('data-tooltip', 'Ambil Foto');
+      if (btnFrame) btnFrame.style.display = 'none';
     }
   }
 
   // ─── Capture Flow ───
   async function triggerCapture() {
     if (isCapturing || !stream) return;
+
+    if (captureMode === 'strip' && !hasChosenFrame) {
+      openFrameSelectorModal(true);
+      return;
+    }
+
     isCapturing = true;
 
     try {
@@ -885,6 +1599,7 @@ const App = (() => {
   }
 
   async function executeSingleCapture() {
+    countdownRecordedFrames = [];
     if (timerDuration > 0) {
       await runCountdown(timerDuration);
     }
@@ -892,58 +1607,177 @@ const App = (() => {
     playSound('shutter');
 
     const frameDataUrl = grabCurrentFrame();
+    const recordedFrames = [...countdownRecordedFrames]; // snapshot before clearing
+
     const item = {
       id: Date.now(),
       type: 'single',
       src: frameDataUrl,
       filter: currentFilter,
+      countdownVideoUrl: null,
+      countdownVideoExt: 'webm',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
     capturedItems.unshift(item);
     renderGallery();
-
-    // Open inspector preview modal with option to download or close
     openInspector(item.id);
-
-    // Sync to PC server
     syncToServer(item.src, 'single', currentFilter);
+
+    // Generate countdown video in background (non-blocking)
+    if (recordedFrames.length >= 3) {
+      generateVideosInBackground(item, recordedFrames, null);
+    }
   }
 
+  // ─── Dynamic Photostrip Flow with Live Retake ───
   async function executeStripCapture() {
-    const frames = [];
-    const totalShots = 4;
+    const tmpl = getActiveTemplate();
+    const totalShots = tmpl.totalShots || 4;
+    currentStripFrames = [];
+    allStripCountdownFrames = [];
 
     for (let i = 1; i <= totalShots; i++) {
+      countdownRecordedFrames = [];
       const waitTime = timerDuration > 0 ? timerDuration : 3;
       await runCountdown(waitTime, `${i} / ${totalShots}`);
       flashScreen();
       playSound('shutter');
-      frames.push(grabCurrentFrame());
+      currentStripFrames.push(grabCurrentFrame());
+      allStripCountdownFrames.push(...countdownRecordedFrames);
       if (i < totalShots) {
         await sleep(600);
       }
     }
 
-    const stripDataUrl = await buildPhotoStrip(frames, stripFrameColor);
+    openStripReviewModal();
+  }
+
+  function openStripReviewModal() {
+    const modal = $('#strip-review-modal');
+    if (!modal) {
+      // Fallback: finalize directly if modal not found
+      finalizeStripCapture();
+      return;
+    }
+    renderStripReviewCards();
+    modal.classList.add('active');
+  }
+
+  function closeStripReviewModal() {
+    const modal = $('#strip-review-modal');
+    if (modal) modal.classList.remove('active');
+  }
+
+  function renderStripReviewCards() {
+    const grid = $('#strip-review-grid');
+    if (!grid) return;
+    const shotCount = currentStripFrames.length;
+    const title = $('#strip-review-title');
+    const copy = $('#strip-review-copy');
+    const retakeAllLabel = $('#retake-all-label');
+    if (title) title.textContent = `Hasil jepretanmu (${shotCount} foto)`;
+    if (copy) copy.textContent = `Frame pilihanmu meminta ${shotCount} foto. Ulangi yang perlu, lalu simpan.`;
+    if (retakeAllLabel) retakeAllLabel.textContent = `Ulangi semua (${shotCount} foto)`;
+    grid.innerHTML = currentStripFrames.map((frameSrc, idx) => `
+      <div class="review-frame-card" data-index="${idx}">
+        <div class="review-frame-thumb-wrap">
+          <img src="${frameSrc}" alt="Frame ${idx + 1}" class="review-frame-thumb" />
+          <span class="review-frame-badge">Shot ${idx + 1}</span>
+        </div>
+        <button class="btn-retake-single" data-index="${idx}">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="14" height="14">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+          </svg>
+          Ulangi Foto ${idx + 1}
+        </button>
+      </div>
+    `).join('');
+
+    // Bind retake buttons
+    grid.querySelectorAll('.btn-retake-single').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const idx = parseInt(btn.dataset.index);
+        await retakeSingleFrame(idx);
+      });
+    });
+  }
+
+  async function retakeSingleFrame(index) {
+    closeStripReviewModal();
+    // 3s Countdown for single retake
+    const waitTime = timerDuration > 0 ? timerDuration : 3;
+    await runCountdown(waitTime, `Retake Foto ${index + 1}`);
+    flashScreen();
+    playSound('shutter');
+    currentStripFrames[index] = grabCurrentFrame();
+    openStripReviewModal();
+  }
+
+  async function finalizeStripCapture() {
+    closeStripReviewModal();
+    const tmpl = getActiveTemplate();
+    const stripDataUrl = await buildPhotoStrip(currentStripFrames, tmpl, stripCustomTitle);
+    const countdownFramesSnapshot = [...allStripCountdownFrames];
 
     const item = {
       id: Date.now(),
       type: 'strip',
       src: stripDataUrl,
-      rawFrames: frames,
+      rawFrames: [...currentStripFrames],
+      template: tmpl,
       filter: currentFilter,
+      countdownVideoUrl: null,
+      countdownVideoExt: 'webm',
+      boomerangVideoUrl: null,
+      boomerangVideoExt: 'webm',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
     capturedItems.unshift(item);
     renderGallery();
     openInspector(item.id);
-
-    // Sync strip to PC server
     syncToServer(item.src, 'strip', currentFilter);
+
+    // Generate videos in background (non-blocking)
+    generateVideosInBackground(item, countdownFramesSnapshot, item.rawFrames);
   }
 
+  // ─── Background Video Generation (non-blocking) ───
+  async function generateVideosInBackground(item, countdownFrames, photoFrames) {
+    // Generate countdown video
+    if (countdownFrames && countdownFrames.length >= 3) {
+      try {
+        const result = await createVideoFromFrames(countdownFrames, 360, 270, 8);
+        if (result) {
+          item.countdownVideoUrl = result.url;
+          item.countdownVideoExt = result.ext;
+          // Show button if inspector is still viewing this item
+          if (activeInspectorItemId == item.id) {
+            const btn = $('#btn-modal-countdown-gif');
+            if (btn) btn.style.display = 'inline-flex';
+          }
+        }
+      } catch (_) {}
+    }
+
+    // Generate boomerang video (strip only)
+    if (photoFrames && photoFrames.length >= 2) {
+      try {
+        const result = await createBoomerangVideo(photoFrames);
+        if (result) {
+          item.boomerangVideoUrl = result.url;
+          item.boomerangVideoExt = result.ext;
+          if (activeInspectorItemId == item.id) {
+            const btn = $('#btn-modal-gif');
+            if (btn) btn.style.display = 'inline-flex';
+          }
+        }
+      } catch (_) {}
+    }
+  }
+
+  // ─── Voice-Aware Countdown with GIF Frame Recording ───
   function runCountdown(seconds, subLabel = '') {
     return new Promise(resolve => {
       const overlay = $('#countdown-overlay');
@@ -953,17 +1787,50 @@ const App = (() => {
       progress.textContent = subLabel;
       overlay.classList.add('active');
 
+      // Record video frames for GIF during countdown (~4fps)
+      const recordInterval = setInterval(() => {
+        const frameData = recordVideoFrameForGif();
+        if (frameData) countdownRecordedFrames.push(frameData);
+      }, 250);
+
       let current = seconds;
       digits.textContent = current;
-      playSound('tick');
+
+      function playTickAudio(num) {
+        const mode = AUDIO_MODES[currentAudioModeIndex].id;
+        if (mode === 'voice-id') {
+          if (num === 3) speakVoice('Tiga', 'id-ID');
+          else if (num === 2) speakVoice('Dua', 'id-ID');
+          else if (num === 1) speakVoice('Satu', 'id-ID');
+          else if (num > 3) speakVoice(String(num), 'id-ID');
+          playSound('tick');
+        } else if (mode === 'voice-en') {
+          if (num === 3) speakVoice('Three', 'en-US');
+          else if (num === 2) speakVoice('Two', 'en-US');
+          else if (num === 1) speakVoice('One', 'en-US');
+          else if (num > 3) speakVoice(String(num), 'en-US');
+          playSound('tick');
+        } else if (mode === 'chime') {
+          playChime(523 + (seconds - num) * 130, 0.2);
+        } else if (mode === 'beep') {
+          playSound('tick');
+        }
+      }
+
+      playTickAudio(current);
 
       const interval = setInterval(() => {
         current--;
         if (current > 0) {
           digits.textContent = current;
-          playSound('tick');
+          playTickAudio(current);
         } else {
           clearInterval(interval);
+          clearInterval(recordInterval);
+          const mode = AUDIO_MODES[currentAudioModeIndex].id;
+          if (mode === 'voice-id') speakVoice('Senyum!', 'id-ID');
+          else if (mode === 'voice-en') speakVoice('Smile!', 'en-US');
+          else if (mode === 'chime') playChime(1046, 0.3);
           playSound('snap');
           overlay.classList.remove('active');
           resolve();
@@ -979,9 +1846,13 @@ const App = (() => {
     flashEl.classList.add('flash');
   }
 
+  // ─── Dual Resolution Capture ───
   function grabCurrentFrame() {
-    const srcW = canvasEl.width;
-    const srcH = canvasEl.height;
+    // Dual Resolution Engine:
+    // Live preview uses 720p (efficient, cool USB camera)
+    // Snapped photo captures directly from full-sensor resolution (e.g. 1080p, 2K, 4K)
+    const nativeW = videoEl.videoWidth || canvasEl.width;
+    const nativeH = videoEl.videoHeight || canvasEl.height;
 
     let targetRatio = 4 / 3;
     if (currentRatio === '1:1') targetRatio = 1;
@@ -990,36 +1861,71 @@ const App = (() => {
     else if (currentRatio === '4:3') targetRatio = 4 / 3;
 
     // Center crop based on selected aspect ratio
-    const currentCanvasRatio = srcW / srcH;
+    const currentVideoRatio = nativeW / nativeH;
     let cropW, cropH, cropX, cropY;
 
-    if (currentCanvasRatio > targetRatio) {
-      // Source canvas is wider than target ratio (e.g. 16:9 camera cropped to 4:3, 1:1, 3:4)
-      cropH = srcH;
+    if (currentVideoRatio > targetRatio) {
+      cropH = nativeH;
       cropW = Math.round(cropH * targetRatio);
-      cropX = Math.round((srcW - cropW) / 2);
+      cropX = Math.round((nativeW - cropW) / 2);
       cropY = 0;
     } else {
-      // Source canvas is taller than target ratio
-      cropW = srcW;
+      cropW = nativeW;
       cropH = Math.round(cropW / targetRatio);
       cropX = 0;
-      cropY = Math.round((srcH - cropH) / 2);
+      cropY = Math.round((nativeH - cropH) / 2);
     }
 
+    // Step 1: Render high-resolution processed canvas
+    const hiCanvas = document.createElement('canvas');
+    hiCanvas.width = nativeW;
+    hiCanvas.height = nativeH;
+    const hiCtx = hiCanvas.getContext('2d', { willReadFrequently: true });
+
+    try {
+      if (Filters.isCanvasFilter(currentFilter)) {
+        Filters.applyCanvas(currentFilter, hiCtx, videoEl, nativeW, nativeH, isMirrored);
+      } else if (Filters.isGpuFilter(currentFilter)) {
+        Filters.applyGpu(currentFilter, hiCtx, videoEl, nativeW, nativeH, isMirrored);
+      } else {
+        hiCtx.save();
+        if (isMirrored) {
+          hiCtx.translate(nativeW, 0);
+          hiCtx.scale(-1, 1);
+        }
+        hiCtx.drawImage(videoEl, 0, 0, nativeW, nativeH);
+        hiCtx.restore();
+
+        if (currentFilter !== 'normal') {
+          const imgData = hiCtx.getImageData(0, 0, nativeW, nativeH);
+          const filtered = Filters.apply(currentFilter, imgData);
+          hiCtx.putImageData(filtered, 0, 0);
+        }
+      }
+    } catch (_) {
+      hiCtx.save();
+      if (isMirrored) {
+        hiCtx.translate(nativeW, 0);
+        hiCtx.scale(-1, 1);
+      }
+      hiCtx.drawImage(videoEl, 0, 0, nativeW, nativeH);
+      hiCtx.restore();
+    }
+
+    // Step 2: Crop to selected aspect ratio at full resolution
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = cropW;
     tempCanvas.height = cropH;
     const tCtx = tempCanvas.getContext('2d');
-    tCtx.drawImage(canvasEl, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+    tCtx.drawImage(hiCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
 
-    // Bake active stickers onto the captured photo!
+    // Bake active stickers onto high-res canvas
     drawStickersOnCanvas(tCtx, cropW, cropH);
 
     return tempCanvas.toDataURL('image/png', 0.95);
   }
 
-  // ─── 4-Shot Photobooth Strip Generator ───
+  // ─── Frame-Driven Photostrip Generator ───
   // Cover-fit helper: draws image to fill destination without stretching
   function drawImageCover(sCtx, img, dx, dy, dw, dh) {
     const srcW = img.naturalWidth || img.width;
@@ -1072,7 +1978,117 @@ const App = (() => {
     ctx.fill();
   }
 
-  function buildPhotoStrip(frames, frameColor = '#ffffff', customTitle = 'SNAPBOOTH STUDIO') {
+  async function buildPhotoStrip(frames, templateOrColor = '#ffffff', customTitle = 'SNAPBOOTH STUDIO') {
+    let template = typeof templateOrColor === 'object' && templateOrColor !== null ? templateOrColor : null;
+    if (!template) {
+      if (typeof templateOrColor === 'string' && (templateOrColor.startsWith('#') || templateOrColor === 'film')) {
+        template = {
+          id: 'color-' + templateOrColor,
+          type: 'preset-color',
+          color: templateOrColor,
+          totalShots: frames.length,
+          name: 'Solid Strip'
+        };
+      } else {
+        template = getActiveTemplate();
+      }
+    }
+
+    if (template && template.type === 'png-overlay') {
+      return buildCustomOverlayStrip(frames, template);
+    }
+
+    return buildClassicColorStrip(frames, (template && template.color) || '#ffffff', customTitle, (template && template.totalShots) || frames.length);
+  }
+
+  function getOrScanTemplate(template) {
+    if (_templateCache[template.id]) {
+      return Promise.resolve(_templateCache[template.id]);
+    }
+
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        if (template.slots && template.slots.length > 0 && template.processedOverlayDataUrl) {
+          const ovImg = new Image();
+          ovImg.onload = () => {
+            const res = {
+              slots: template.slots,
+              overlayImage: ovImg,
+              width: img.naturalWidth || img.width,
+              height: img.naturalHeight || img.height
+            };
+            _templateCache[template.id] = res;
+            resolve(res);
+          };
+          ovImg.onerror = reject;
+          ovImg.src = template.processedOverlayDataUrl;
+          return;
+        }
+
+        const scanned = scanChromaKeySlots(img);
+        const ovImg = new Image();
+        ovImg.onload = () => {
+          const res = {
+            slots: scanned.slots,
+            overlayImage: ovImg,
+            width: scanned.width,
+            height: scanned.height
+          };
+          _templateCache[template.id] = res;
+          resolve(res);
+        };
+        ovImg.onerror = reject;
+        ovImg.src = scanned.canvasWithHoles.toDataURL('image/png');
+      };
+      img.onerror = reject;
+      img.src = template.src;
+    });
+  }
+
+  function buildCustomOverlayStrip(frames, template) {
+    return new Promise(async (resolve) => {
+      try {
+        const overlayInfo = await getOrScanTemplate(template);
+        const { slots, overlayImage, width, height } = overlayInfo;
+
+        const stripCanvas = document.createElement('canvas');
+        stripCanvas.width = width;
+        stripCanvas.height = height;
+        const sCtx = stripCanvas.getContext('2d');
+
+        sCtx.fillStyle = '#ffffff';
+        sCtx.fillRect(0, 0, width, height);
+
+        const loadedImages = await Promise.all(frames.map(fSrc => {
+          return new Promise(res => {
+            const img = new Image();
+            img.onload = () => res(img);
+            img.onerror = () => res(null);
+            img.src = fSrc;
+          });
+        }));
+
+        slots.forEach((slot, idx) => {
+          const img = loadedImages[idx] || loadedImages[loadedImages.length - 1];
+          if (img) {
+            drawImageCover(sCtx, img, slot.x, slot.y, slot.width, slot.height);
+          }
+        });
+
+        if (overlayImage) {
+          sCtx.drawImage(overlayImage, 0, 0, width, height);
+        }
+
+        resolve(stripCanvas.toDataURL('image/png', 0.98));
+      } catch (err) {
+        console.error('Error building custom overlay strip:', err);
+        resolve(buildClassicColorStrip(frames, '#ffffff'));
+      }
+    });
+  }
+
+  function buildClassicColorStrip(frames, frameColor = '#ffffff', customTitle = 'SNAPBOOTH STUDIO', totalShots = 4) {
     return new Promise(resolve => {
       const stripCanvas = document.createElement('canvas');
       const sCtx = stripCanvas.getContext('2d');
@@ -1084,31 +2100,26 @@ const App = (() => {
       const photoWidth = stripWidth - padding * 2;
       const photoHeight = Math.round(photoWidth * (3 / 4));
       const footerHeight = 110;
-      const stripHeight = padding * 2 + (photoHeight * 4) + (gap * 3) + footerHeight;
+      const count = frames.length || totalShots;
+      const stripHeight = padding * 2 + (photoHeight * count) + (gap * (count - 1)) + footerHeight;
 
       stripCanvas.width = stripWidth;
       stripCanvas.height = stripHeight;
 
       if (isFilm) {
-        // Film base background
         sCtx.fillStyle = '#0f1115';
         sCtx.fillRect(0, 0, stripWidth, stripHeight);
-
-        // Draw 35mm sprocket holes along left and right borders
         const holeW = 16;
         const holeH = 22;
         const holeRadius = 4;
         const holeSpacing = 36;
         const totalHoles = Math.floor(stripHeight / holeSpacing);
-
         sCtx.fillStyle = 'rgba(255, 255, 255, 0.12)';
         for (let h = 0; h < totalHoles; h++) {
           const hy = h * holeSpacing + 12;
           drawRoundedRect(sCtx, 12, hy, holeW, holeH, holeRadius);
           drawRoundedRect(sCtx, stripWidth - 12 - holeW, hy, holeW, holeH, holeRadius);
         }
-
-        // Film edge markings
         sCtx.fillStyle = '#f59e0b';
         sCtx.font = '600 10px "JetBrains Mono", monospace';
         sCtx.textAlign = 'left';
@@ -1125,7 +2136,7 @@ const App = (() => {
         const img = new Image();
         img.onload = () => {
           loaded++;
-          if (loaded === 4) {
+          if (loaded === count) {
             images.forEach((imgEl, idx) => {
               const y = padding + idx * (photoHeight + gap);
               drawImageCover(sCtx, imgEl, padding, y, photoWidth, photoHeight);
@@ -1248,9 +2259,16 @@ const App = (() => {
       captionWrapper.style.display = item.type === 'strip' ? 'flex' : 'none';
     }
 
+    // Countdown video button (available when video was recorded during capture)
+    const btnCountdownGif = $('#btn-modal-countdown-gif');
+    if (btnCountdownGif) {
+      btnCountdownGif.style.display = item.countdownVideoUrl ? 'inline-flex' : 'none';
+    }
+
+    // Boomerang video button (strip with multiple frames)
     const btnGif = $('#btn-modal-gif');
     if (btnGif) {
-      btnGif.style.display = item.type === 'strip' ? 'inline-flex' : 'none';
+      btnGif.style.display = (item.boomerangVideoUrl || (item.type === 'strip' && item.rawFrames)) ? 'inline-flex' : 'none';
     }
 
     modal.classList.add('active');
@@ -1529,8 +2547,8 @@ const App = (() => {
 
       const minCodeSize = 8;
       writeByte(minCodeSize);
-      const clearCode = 1 << minCodeSize;
-      const eoiCode = clearCode + 1;
+      const clearCode = 1 << minCodeSize;   // 256
+      const eoiCode = clearCode + 1;         // 257
 
       const subBlock = [];
       function flushSubBlock() {
@@ -1543,7 +2561,8 @@ const App = (() => {
 
       let curBits = 0;
       let curVal = 0;
-      let codeSize = minCodeSize + 1;
+      let codeSize = minCodeSize + 1;        // starts at 9
+      let nextCode = eoiCode + 1;            // first dictionary entry = 258
 
       function writeCode(c) {
         curVal |= (c << curBits);
@@ -1556,10 +2575,27 @@ const App = (() => {
         }
       }
 
+      // Emit clear code to initialize decoder's dictionary
       writeCode(clearCode);
+
       for (let p = 0; p < pixels.length; p++) {
         writeCode(pixels[p]);
+        nextCode++;
+
+        // When decoder's dictionary reaches 2^codeSize, it increases code width
+        // Encoder must match by increasing codeSize at the same point
+        if (nextCode === (1 << codeSize) && codeSize < 12) {
+          codeSize++;
+        }
+
+        // At max table size (4096), reset with clear code
+        if (nextCode >= 4096) {
+          writeCode(clearCode);
+          codeSize = minCodeSize + 1;
+          nextCode = eoiCode + 1;
+        }
       }
+
       writeCode(eoiCode);
 
       if (curBits > 0) subBlock.push(curVal & 0xff);
@@ -1571,37 +2607,147 @@ const App = (() => {
     return new Uint8Array(bytes);
   }
 
-  async function generateBoomerangGif(frames) {
-    showSyncToast('Membuat GIF Boomerang...', 'success');
-    const gifW = 360;
-    const gifH = 270;
-    const gCanvas = document.createElement('canvas');
-    gCanvas.width = gifW;
-    gCanvas.height = gifH;
-    const gCtx = gCanvas.getContext('2d');
+  // ─── Video Helper: Record Video Frame for countdown recording ───
+  function recordVideoFrameForGif() {
+    if (!videoEl || videoEl.readyState < 2) return null;
+    const vW = 360, vH = 270;
+    if (!_gifRecordCanvas) {
+      _gifRecordCanvas = document.createElement('canvas');
+      _gifRecordCanvas.width = vW;
+      _gifRecordCanvas.height = vH;
+      _gifRecordCtx = _gifRecordCanvas.getContext('2d', { willReadFrequently: true });
+    }
+    _gifRecordCtx.save();
+    if (isMirrored) {
+      _gifRecordCtx.translate(vW, 0);
+      _gifRecordCtx.scale(-1, 1);
+    }
+    _gifRecordCtx.drawImage(videoEl, 0, 0, vW, vH);
+    _gifRecordCtx.restore();
+    return _gifRecordCtx.getImageData(0, 0, vW, vH);
+  }
 
-    // Boomerang sequence: 0 -> 1 -> 2 -> 3 -> 2 -> 1
-    const seqIndices = [0, 1, 2, 3, 2, 1];
-    const loadedImages = await Promise.all(frames.map(src => {
-      return new Promise(res => {
+  // ─── Video Helper: Detect best supported video MIME type ───
+  function getVideoMimeType() {
+    if (typeof MediaRecorder === 'undefined') return null;
+    const types = [
+      'video/mp4;codecs=avc1',
+      'video/webm;codecs=vp9',
+      'video/webm;codecs=vp8',
+      'video/webm'
+    ];
+    for (const t of types) {
+      if (MediaRecorder.isTypeSupported(t)) return t;
+    }
+    return null;
+  }
+
+  // ─── Video Helper: Create video from ImageData frames using MediaRecorder ───
+  function createVideoFromFrames(framesImageData, width, height, fps = 8) {
+    return new Promise(resolve => {
+      const mimeType = getVideoMimeType();
+      if (!mimeType || framesImageData.length < 2) { resolve(null); return; }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+
+      // Draw first frame so captureStream has content
+      ctx.putImageData(framesImageData[0], 0, 0);
+
+      const stream = canvas.captureStream(0);
+      const track = stream.getVideoTracks()[0];
+      const recorder = new MediaRecorder(stream, {
+        mimeType,
+        videoBitsPerSecond: 2_000_000
+      });
+      const chunks = [];
+
+      recorder.ondataavailable = e => {
+        if (e.data && e.data.size > 0) chunks.push(e.data);
+      };
+
+      recorder.onstop = () => {
+        const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
+        const blob = new Blob(chunks, { type: mimeType.split(';')[0] });
+        resolve({ url: URL.createObjectURL(blob), ext });
+      };
+
+      recorder.start();
+
+      const frameDelay = Math.round(1000 / fps);
+      let idx = 0;
+
+      function drawNext() {
+        if (idx >= framesImageData.length) {
+          setTimeout(() => recorder.stop(), 150);
+          return;
+        }
+        ctx.putImageData(framesImageData[idx], 0, 0);
+        if (track.requestFrame) track.requestFrame();
+        idx++;
+        setTimeout(drawNext, frameDelay);
+      }
+
+      drawNext();
+    });
+  }
+
+  // ─── Video Helper: Create boomerang video from photo data URLs ───
+  async function createBoomerangVideo(frames) {
+    const mimeType = getVideoMimeType();
+    if (!mimeType || frames.length < 2) return null;
+
+    const vW = 480, vH = 360;
+    const tmpCanvas = document.createElement('canvas');
+    tmpCanvas.width = vW;
+    tmpCanvas.height = vH;
+    const tmpCtx = tmpCanvas.getContext('2d');
+
+    // Load all photo images
+    const loadedImages = (await Promise.all(frames.map(src =>
+      new Promise(res => {
         const img = new Image();
         img.onload = () => res(img);
+        img.onerror = () => res(null);
         img.src = src;
-      });
-    }));
+      })
+    ))).filter(Boolean);
 
-    const framesImageData = seqIndices.map(idx => {
+    if (loadedImages.length < 2) return null;
+
+    // Build boomerang sequence: 0→1→2→3→2→1, repeated 3 times
+    const seq = [];
+    for (let rep = 0; rep < 3; rep++) {
+      for (let i = 0; i < loadedImages.length; i++) seq.push(i);
+      for (let i = loadedImages.length - 2; i > 0; i--) seq.push(i);
+    }
+
+    // Convert photo sequence to ImageData frames (cover-fill, no clipping)
+    const framesData = seq.map(idx => {
       const img = loadedImages[idx];
-      gCtx.clearRect(0, 0, gifW, gifH);
-      drawImageCover(gCtx, img, 0, 0, gifW, gifH);
-      return gCtx.getImageData(0, 0, gifW, gifH);
+      tmpCtx.clearRect(0, 0, vW, vH);
+      const srcW = img.naturalWidth || img.width;
+      const srcH = img.naturalHeight || img.height;
+      const srcR = srcW / srcH;
+      const dstR = vW / vH;
+      let sx, sy, sw, sh;
+      if (srcR > dstR) { sh = srcH; sw = sh * dstR; sx = (srcW - sw) / 2; sy = 0; }
+      else { sw = srcW; sh = sw / dstR; sx = 0; sy = (srcH - sh) / 2; }
+      tmpCtx.drawImage(img, sx, sy, sw, sh, 0, 0, vW, vH);
+      return tmpCtx.getImageData(0, 0, vW, vH);
     });
 
-    const gifBytes = createGif(framesImageData, gifW, gifH, 30);
-    const blob = new Blob([gifBytes], { type: 'image/gif' });
-    const url = URL.createObjectURL(blob);
-    downloadFile(url, `snapbooth-boomerang-${Date.now()}.gif`);
-    showSyncToast('GIF Boomerang berhasil diunduh!', 'success');
+    return createVideoFromFrames(framesData, vW, vH, 4);
+  }
+
+  // ─── Legacy Boomerang Video download (fallback for items without pre-generated video) ───
+  async function generateBoomerangVideo(frames) {
+    const result = await createBoomerangVideo(frames);
+    if (result) {
+      downloadFile(result.url, `snapbooth-boomerang-${Date.now()}.${result.ext}`);
+    }
   }
 
   return { init };

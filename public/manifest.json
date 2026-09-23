@@ -1,0 +1,27 @@
+{
+  "name": "SnapBooth Studio — Web Photobooth",
+  "short_name": "SnapBooth",
+  "description": "Studio photobooth browser dengan 31 filter real-time, live retake, dan 4-shot photostrips.",
+  "start_url": "/",
+  "id": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f7f0df",
+  "theme_color": "#f7f0df",
+  "categories": ["photo", "entertainment", "lifestyle"],
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
