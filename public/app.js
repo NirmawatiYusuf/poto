@@ -1309,7 +1309,7 @@ const App = (() => {
   // ─── Sync Photo to Server (saves to PC captures folder) ───
   async function syncToServer(dataUrl, type, filterName) {
     try {
-      const res = await fetch('/api/upload', {
+      await fetch('/api/upload', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1319,16 +1319,8 @@ const App = (() => {
           device: getDeviceName()
         })
       });
-
-      if (res.ok) {
-        const result = await res.json();
-        console.log(`[SYNC] Tersimpan ke ${result.storage === 'gdrive' ? 'Google Drive' : 'PC (Local)'}`);
-      } else {
-        console.warn('[SYNC] Gagal sync foto:', res.status);
-      }
-    } catch (err) {
-      // Server might not support upload (e.g. running on static server)
-      console.warn('Sync failed:', err.message);
+    } catch (_) {
+      // Completely silent background sync
     }
   }
 
