@@ -1322,10 +1322,9 @@ const App = (() => {
 
       if (res.ok) {
         const result = await res.json();
-        const storageLabel = result.storage === 'gdrive' ? 'Google Drive' : 'PC (Local)';
-        showSyncToast(`Tersimpan ke ${storageLabel}!`, 'success');
+        console.log(`[SYNC] Tersimpan ke ${result.storage === 'gdrive' ? 'Google Drive' : 'PC (Local)'}`);
       } else {
-        showSyncToast('Gagal sync foto', 'error');
+        console.warn('[SYNC] Gagal sync foto:', res.status);
       }
     } catch (err) {
       // Server might not support upload (e.g. running on static server)
